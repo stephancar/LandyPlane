@@ -7,11 +7,77 @@
   <style>
     html, body { margin: 0; height: 100%; background: #0b1020; color: #fff; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
     canvas { display: block; width: 100vw; height: 100vh; }
+    .touch-ui{
+  position: fixed;
+  inset: 0;
+  pointer-events: none; /* only buttons capture touches */
+  display: none;        /* enabled on touch devices in JS */
+}
+
+.touch-left, .touch-right{
+  position: absolute;
+  bottom: 16px;
+  display: flex;
+  gap: 12px;
+  pointer-events: auto;
+}
+
+.touch-left{ left: 16px; flex-direction: column; }
+.touch-right{ right: 16px; }
+
+.btn{
+  width: 72px;
+  height: 72px;
+  border-radius: 18px;
+  border: 2px solid rgba(255,255,255,0.25);
+  background: rgba(255,255,255,0.10);
+  color: rgba(255,255,255,0.92);
+  font-size: 28px;
+  font-weight: 700;
+  touch-action: none;     /* prevents scroll/zoom gestures on button */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.btn:active{
+  background: rgba(255,255,255,0.18);
+}
+
+.btn.throttle{
+  width: 160px;
+  font-size: 16px;
+  letter-spacing: 0.06em;
+}
+
+.touch-hint{
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 18px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(0,0,0,0.25);
+  color: rgba(255,255,255,0.75);
+  font-size: 12px;
+  pointer-events: none;
+}
   </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<div id="touchUI" class="touch-ui" aria-hidden="true">
+  <div class="touch-left">
+    <button class="btn" data-touch="pitchUp">▲</button>
+    <button class="btn" data-touch="pitchDown">▼</button>
+  </div>
 
+  <div class="touch-right">
+    <button class="btn throttle" data-touch="throttle">THROTTLE</button>
+  </div>
+
+  <div class="touch-hint">Best in landscape • Hold buttons</div>
+</div>
 <script>
 (() => {
   // ---------- Canvas ----------
@@ -48,11 +114,45 @@
   });
   window.addEventListener("keyup", (e) => keys.delete(e.code));
 
-  const input = {
-    get throttleUp() { return keys.has("Space") || keys.has("ArrowRight"); }, // hold to increase
-    get pitchUp()    { return keys.has("ArrowUp") || keys.has("KeyW"); },
-    get pitchDown()  { return keys.has("ArrowDown") || keys.has("KeyS"); },
+    const input = {
+    get throttleUp() { return keys.has("Space") || keys.has("ArrowRight") || touchState.throttle; },
+    get pitchUp()    { return keys.has("ArrowUp") || keys.has("KeyW") || touchState.pitchUp; },
+    get pitchDown()  { return keys.has("ArrowDown") || keys.has("KeyS") || touchState.pitchDown; },
   };
+
+    // ---------- Touch controls ----------
+  const touchState = {
+    throttle: false,
+    pitchUp: false,
+    pitchDown: false
+  };
+
+  // Enable touch UI on devices that likely support touch
+  const isTouch = window.matchMedia("(pointer: coarse)").matches || "ontouchstart" in window;
+  const touchUI = document.getElementById("touchUI");
+  if (isTouch) touchUI.style.display = "block";
+
+  function setTouch(action, on) {
+    touchState[action] = on;
+  }
+
+  function bindTouchButtons() {
+    const btns = document.querySelectorAll("[data-touch]");
+    btns.forEach(btn => {
+      const action = btn.getAttribute("data-touch");
+
+      const start = (e) => { e.preventDefault(); setTouch(action, true); };
+      const end   = (e) => { e.preventDefault(); setTouch(action, false); };
+
+      btn.addEventListener("pointerdown", start);
+      btn.addEventListener("pointerup", end);
+      btn.addEventListener("pointercancel", end);
+      btn.addEventListener("pointerleave", end);
+    });
+  }
+  bindTouchButtons();
+
+    document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
 
   // ---------- Plane ----------
   const plane = {
@@ -285,3 +385,4 @@ if (Math.abs(plane.vy) < 0.5) plane.vy = 0;
 </script>
 </body>
 </html>
+
