@@ -2,85 +2,66 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Bush Pilot — MVP Step 1</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>Bush Pilot — MVP</title>
   <style>
-    html, body { margin: 0; height: 100%; background: #0b1020; color: #fff; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    html, body { margin: 0; height: 100%; background: #0b1020; color: #fff; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; overflow: hidden; }
     canvas { display: block; width: 100vw; height: 100vh; }
+
+    /* Touch UI */
     .touch-ui{
-  position: fixed;
-  inset: 0;
-  pointer-events: none; /* only buttons capture touches */
-  display: none;        /* enabled on touch devices in JS */
-}
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      display: none;
+    }
+    .touch-left, .touch-right{
+      position: absolute;
+      bottom: 16px;
+      display: flex;
+      gap: 12px;
+      pointer-events: auto;
+    }
+    .touch-left{ left: 16px; }
+    .touch-right{ right: 16px; flex-direction: column; }
 
-.touch-left, .touch-right{
-  position: absolute;
-  bottom: 16px;
-  display: flex;
-  gap: 12px;
-  pointer-events: auto;
-}
-    
-    .touch-left{ left: 16px; flex-direction: column; }
-
-.touch-right{ right: 16px; flex-direction: column; }
-
-.btn{
-  width: 72px;
-  height: 72px;
-  border-radius: 18px;
-  border: 2px solid rgba(255,255,255,0.25);
-  background: rgba(255,255,255,0.10);
-  color: rgba(255,255,255,0.92);
-  font-size: 28px;
-  font-weight: 700;
-  touch-action: none;     /* prevents scroll/zoom gestures on button */
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.btn:active{
-  background: rgba(255,255,255,0.18);
-}
-
-.btn.throttle{
-  width: 160px;
-  font-size: 16px;
-  letter-spacing: 0.06em;
-}
-
-.touch-hint{
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: 18px;
-  padding: 8px 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(0,0,0,0.25);
-  color: rgba(255,255,255,0.75);
-  font-size: 12px;
-  pointer-events: none;
-}
+    .btn{
+      width: 72px;
+      height: 72px;
+      border-radius: 18px;
+      border: 2px solid rgba(255,255,255,0.25);
+      background: rgba(255,255,255,0.10);
+      color: rgba(255,255,255,0.92);
+      font-size: 28px;
+      font-weight: 700;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .btn:active{ background: rgba(255,255,255,0.18); }
+    .btn.throttle{
+      width: 160px;
+      font-size: 16px;
+      letter-spacing: 0.06em;
+    }
   </style>
 </head>
 <body>
-<canvas id="c"></canvas>
-<div id="touchUI" class="touch-ui" aria-hidden="true">
-  <!-- LEFT: throttle -->
-  <div class="touch-left">
-    <button class="btn throttle" data-touch="throttle">THROTTLE</button>
+  <canvas id="c"></canvas>
+
+  <div id="touchUI" class="touch-ui" aria-hidden="true">
+    <!-- LEFT: throttle -->
+    <div class="touch-left">
+      <button class="btn throttle" data-touch="throttle">THROTTLE</button>
+    </div>
+
+    <!-- RIGHT: pitch -->
+    <div class="touch-right">
+      <button class="btn" data-touch="pitchUp">▲</button>
+      <button class="btn" data-touch="pitchDown">▼</button>
+    </div>
   </div>
 
-  <!-- RIGHT: pitch -->
-  <div class="touch-right">
-    <button class="btn" data-touch="pitchUp">▲</button>
-    <button class="btn" data-touch="pitchDown">▼</button>
-  </div>
-
-  <div class="touch-hint">Best in landscape • Hold buttons</div>
-</div>
 <script>
 (() => {
   // ---------- Canvas ----------
@@ -88,7 +69,6 @@
   const ctx = canvas.getContext("2d");
 
   function resize() {
-    // Render at device pixel ratio for crispness
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     canvas.width  = Math.floor(window.innerWidth * dpr);
     canvas.height = Math.floor(window.innerHeight * dpr);
@@ -100,9 +80,92 @@
   const W = () => window.innerWidth;
   const H = () => window.innerHeight;
 
+  // ---------- Simple deterministic PRNG + smooth noise ----------
+  function makeRng(seed) {
+    let t = seed >>> 0;
+    return () => {
+      // xorshift32
+      t ^= t << 13; t >>>= 0;
+      t ^= t >> 17; t >>>= 0;
+      t ^= t << 5;  t >>>= 0;
+      return (t >>> 0) / 4294967296;
+    };
+  }
+  const rng = makeRng(1337);
+
+  function smoothstep(t) { return t * t * (3 - 2 * t); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  // ---------- Terrain (heightmap) ----------
+  const terrain = {
+    // We keep a flat runway region at the start, then gentle random hills
+    baseY: 420,
+    stepX: 90,          // spacing between control points
+    amp: 120,           // hill amplitude
+    maxSlopePerStep: 55,// clamp sudden jumps
+    flatUntilX: 700,    // runway length
+    points: [],         // {x,y}
+  };
+
+  function ensureTerrainToX(xMax) {
+    // generate points until we cover xMax + margin
+    const margin = 1400;
+    const target = xMax + margin;
+
+    if (terrain.points.length === 0) {
+      terrain.points.push({ x: 0, y: terrain.baseY });
+      terrain.points.push({ x: terrain.stepX, y: terrain.baseY });
+    }
+
+    while (terrain.points[terrain.points.length - 1].x < target) {
+      const last = terrain.points[terrain.points.length - 1];
+      const x = last.x + terrain.stepX;
+
+      let y;
+      if (x <= terrain.flatUntilX) {
+        y = terrain.baseY; // runway flat
+      } else {
+        // Gentle wandering: add a bounded random delta
+        const r = (rng() * 2 - 1); // -1..1
+        const delta = r * terrain.maxSlopePerStep;
+        y = last.y + delta;
+
+        // Pull towards base + noise band so it doesn't drift off-screen forever
+        const bandCenter = terrain.baseY + (rng() * 2 - 1) * (terrain.amp * 0.15);
+        y = lerp(y, bandCenter, 0.08);
+
+        // Clamp overall amplitude
+        const minY = terrain.baseY - terrain.amp;
+        const maxY = terrain.baseY + terrain.amp;
+        y = Math.max(minY, Math.min(maxY, y));
+      }
+
+      terrain.points.push({ x, y });
+    }
+  }
+
+  function groundYAt(x) {
+    // find segment
+    if (terrain.points.length < 2) return terrain.baseY;
+    if (x <= terrain.points[0].x) return terrain.points[0].y;
+
+    // ensure points exist ahead
+    ensureTerrainToX(x);
+
+    // binary-ish scan (small list, linear is fine)
+    let i = 0;
+    while (i < terrain.points.length - 2 && terrain.points[i + 1].x < x) i++;
+
+    const p0 = terrain.points[i];
+    const p1 = terrain.points[i + 1];
+
+    const t = (x - p0.x) / (p1.x - p0.x);
+    const s = smoothstep(Math.max(0, Math.min(1, t)));
+    return lerp(p0.y, p1.y, s);
+  }
+
   // ---------- World ----------
   const world = {
-    groundY: 420, // world-space y (down is +)
     gravity: 900, // px/s^2
   };
 
@@ -110,125 +173,114 @@
   const keys = new Set();
   window.addEventListener("keydown", (e) => {
     keys.add(e.code);
-    // prevent page scroll on arrows/space
     if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Space"].includes(e.code)) e.preventDefault();
-    // quick reset
     if (e.code === "KeyR") reset();
   });
   window.addEventListener("keyup", (e) => keys.delete(e.code));
 
-    const input = {
+  // ---------- Touch controls ----------
+  const touchState = { throttle: false, pitchUp: false, pitchDown: false };
+
+  const isTouch = window.matchMedia("(pointer: coarse)").matches || ("ontouchstart" in window);
+  const touchUI = document.getElementById("touchUI");
+  if (isTouch) touchUI.style.display = "block";
+
+  function setTouch(action, on) { touchState[action] = on; }
+
+  document.querySelectorAll("[data-touch]").forEach(btn => {
+    const action = btn.getAttribute("data-touch");
+    const start = (e) => { e.preventDefault(); setTouch(action, true); };
+    const end   = (e) => { e.preventDefault(); setTouch(action, false); };
+    btn.addEventListener("pointerdown", start);
+    btn.addEventListener("pointerup", end);
+    btn.addEventListener("pointercancel", end);
+    btn.addEventListener("pointerleave", end);
+  });
+
+  // prevent page scroll while playing
+  document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
+
+  const input = {
     get throttleUp() { return keys.has("Space") || keys.has("ArrowRight") || touchState.throttle; },
     get pitchUp()    { return keys.has("ArrowUp") || keys.has("KeyW") || touchState.pitchUp; },
     get pitchDown()  { return keys.has("ArrowDown") || keys.has("KeyS") || touchState.pitchDown; },
   };
 
-    // ---------- Touch controls ----------
-  const touchState = {
-    throttle: false,
-    pitchUp: false,
-    pitchDown: false
-  };
-
-  // Enable touch UI on devices that likely support touch
-  const isTouch = window.matchMedia("(pointer: coarse)").matches || "ontouchstart" in window;
-  const touchUI = document.getElementById("touchUI");
-  if (isTouch) touchUI.style.display = "block";
-
-  function setTouch(action, on) {
-    touchState[action] = on;
-  }
-
-  function bindTouchButtons() {
-    const btns = document.querySelectorAll("[data-touch]");
-    btns.forEach(btn => {
-      const action = btn.getAttribute("data-touch");
-
-      const start = (e) => { e.preventDefault(); setTouch(action, true); };
-      const end   = (e) => { e.preventDefault(); setTouch(action, false); };
-
-      btn.addEventListener("pointerdown", start);
-      btn.addEventListener("pointerup", end);
-      btn.addEventListener("pointercancel", end);
-      btn.addEventListener("pointerleave", end);
-    });
-  }
-  bindTouchButtons();
-
-    document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
-
   // ---------- Plane ----------
   const plane = {
-    // world-space
-    x: 120,
+    x: 140,
     y: 260,
     vx: 0,
     vy: 0,
 
-    angle: 0,       // radians
-    angVel: 0,      // rad/s
+    angle: 0,
+    angVel: 0,
 
-    throttle: 0,    // 0..1
+    throttle: 0,
 
-    // tuning
+    // visuals
     w: 56,
     h: 18,
-    thrust: 3200,   // px/s^2-ish
-    drag: 0.6,      // simple air drag coefficient
-    idleDrag: 2.2,
 
-    pitchRate: 2.4, // rad/s target
-    angDamp: 8.0,   // damp angular velocity
-    throttleUpRate: 0.8,   // per second
-    throttleDownRate: 1.2, // per second   <-- comma added here ✅
+    // forces/tuning
+    thrust: 3200,
+    drag: 0.35,       // base linear drag
+    idleDrag: 2.2,     // extra linear drag when not throttling (lets speed go to 0)
+    quadDrag: 0.0012,  // high-speed damping
 
-    lift: 0.8,        // lift strength (tune this)
-    maxLift: 9000,    // cap so it doesn't go infinite at high speed
-    stallSpeed: 220,  // px/s; below this you get much less lift
+    lift: 0.8,
+    maxLift: 9000,
+    stallSpeed: 220,
 
-    inducedDrag: 0.0012, // drag proportional to lift^2 (tune)
-maxAoA: 0.75,        // radians (~43°) clamp angle-of-attack
+    maxAoA: 0.75,        // AoA clamp (rad)
+    inducedDrag: 0.00000018, // lift^2 induced drag (tiny!)
 
-    liftSmooth: 18,     // higher = snappier, lower = smoother
-liftMagSmoothed: 0, // internal state
+    // smoothing / control
+    pitchRate: 2.4,
+    angDamp: 8.0,
+    throttleUpRate: 0.8,
+    throttleDownRate: 1.2,
 
-quadDrag: 0.0012, // tune: high-speed damping
-    
+    liftSmooth: 18,
+    liftMagSmoothed: 0,
+
+    maxSpeed: 200, // requested cap
   };
 
   // ---------- Camera ----------
   const cam = {
     x: 0,
     y: 0,
-    // We follow plane with a small offset so you see ahead
     follow(dt) {
       const targetX = plane.x - W() * 0.30;
       const targetY = plane.y - H() * 0.55;
-
-      // smooth follow
-      const k = 6.0; // follow strength
+      const k = 6.0;
       this.x += (targetX - this.x) * (1 - Math.exp(-k * dt));
       this.y += (targetY - this.y) * (1 - Math.exp(-k * dt));
     }
   };
 
   function reset() {
-    plane.x = 120;
+    plane.x = 140;
     plane.y = 260;
     plane.vx = 0;
     plane.vy = 0;
     plane.angle = 0;
     plane.angVel = 0;
     plane.throttle = 0;
+    plane.liftMagSmoothed = 0;
     cam.x = 0;
     cam.y = 0;
+
+    // Ensure terrain exists around start & ahead
+    ensureTerrainToX(plane.x + 2000);
   }
 
   // ---------- Simulation ----------
   let last = performance.now();
 
   function step(now) {
-    const dt = Math.min(1/30, (now - last) / 1000); // clamp dt for stability
+    const dt = Math.min(1/30, (now - last) / 1000);
     last = now;
 
     update(dt);
@@ -238,19 +290,18 @@ quadDrag: 0.0012, // tune: high-speed damping
   }
 
   function update(dt) {
-    // Throttle: hold to increase, release to decrease
+    // Throttle ramp
     if (input.throttleUp) {
       plane.throttle = Math.min(1, plane.throttle + plane.throttleUpRate * dt);
     } else {
       plane.throttle = Math.max(0, plane.throttle - plane.throttleDownRate * dt);
     }
 
-    // Pitch: adjust angle directly (arcade feel, easy for Step 1)
+    // Pitch
     let pitchInput = 0;
     if (input.pitchUp) pitchInput -= 1;
     if (input.pitchDown) pitchInput += 1;
 
-    // target angular velocity based on input, damp for stability
     const targetAngVel = pitchInput * plane.pitchRate;
     plane.angVel += (targetAngVel - plane.angVel) * (1 - Math.exp(-plane.angDamp * dt));
     plane.angle += plane.angVel * dt;
@@ -258,97 +309,84 @@ quadDrag: 0.0012, // tune: high-speed damping
     // Gravity
     plane.vy += world.gravity * dt;
 
-        // --- Speed & directions ---
+    // Ensure terrain ahead for collision + drawing
+    ensureTerrainToX(plane.x + 2200);
+
+    // Speed/directions
     const speed = Math.hypot(plane.vx, plane.vy);
     const fx = Math.cos(plane.angle);
     const fy = Math.sin(plane.angle);
 
-    // --- Thrust (forward) ---
+    // Thrust (forward)
     plane.vx += fx * (plane.thrust * plane.throttle) * dt;
     plane.vy += fy * (plane.thrust * plane.throttle) * dt;
 
-    // --- Lift (arcade, speed-based) ---
-    // Idea: lift grows ~ speed^2 and depends on "angle of attack" (nose vs airflow).
-    // Airflow direction is opposite velocity.
+    // Lift
     if (speed > 1) {
       const velAngle = Math.atan2(plane.vy, plane.vx);
-      let aoa = plane.angle - velAngle; // angle of attack in radians
-
-      // wrap aoa into [-pi, pi] for stability
+      let aoa = plane.angle - velAngle;
       aoa = Math.atan2(Math.sin(aoa), Math.cos(aoa));
+      aoa = Math.max(-plane.maxAoA, Math.min(plane.maxAoA, aoa));
 
-      // Clamp AoA so you can't generate absurd lift forever
-aoa = Math.max(-plane.maxAoA, Math.min(plane.maxAoA, aoa));
-
-      
-// Induced drag: pitching up/down (high AoA) costs speed.
-// 0 at aoa=0, max near +/-90° (we’ll clamp effect later if needed)
-const aoaAmount = Math.abs(Math.sin(aoa)); // 0..1
-const induced = plane.inducedDrag * aoaAmount * speed; // proportional to speed
-
-// Apply induced drag opposite velocity
-plane.vx -= (plane.vx / speed) * induced * dt;
-plane.vy -= (plane.vy / speed) * induced * dt;
-
-
-      // Stall factor: below stallSpeed, lift ramps down strongly
       const stallFactor = Math.min(1, speed / plane.stallSpeed);
 
-      // Lift magnitude: speed^2 * liftCoef * sin(aoa) (signed)
-      // sin(aoa) gives "pull up" when nose is above airflow.
       let liftMag = (speed * speed) * plane.lift * Math.sin(aoa) * stallFactor;
       liftMag = Math.max(-plane.maxLift, Math.min(plane.maxLift, liftMag));
 
-// Smooth lift to avoid high-speed jitter (prevents sign flipping chaos)
-const a = 1 - Math.exp(-plane.liftSmooth * dt);
-plane.liftMagSmoothed += (liftMag - plane.liftMagSmoothed) * a;
-liftMag = plane.liftMagSmoothed;
-      
-// Lift-induced drag: producing lift costs speed (prevents infinite climb)
-// Scales with lift^2 and acts opposite velocity.
-const inducedMag = plane.inducedDrag * (liftMag * liftMag); // always positive
-plane.vx -= (plane.vx / speed) * inducedMag * dt;
-plane.vy -= (plane.vy / speed) * inducedMag * dt;
-      
-      // Apply lift perpendicular to velocity (rotate velocity by -90 degrees).
-      // Perp unit vector: (-vy/s, vx/s)
+      // Smooth lift to avoid high-speed jitter
+      const a = 1 - Math.exp(-plane.liftSmooth * dt);
+      plane.liftMagSmoothed += (liftMag - plane.liftMagSmoothed) * a;
+      liftMag = plane.liftMagSmoothed;
+
+      // Lift-induced drag (prevents infinite climb)
+      const inducedMag = plane.inducedDrag * (liftMag * liftMag);
+      plane.vx -= (plane.vx / speed) * inducedMag * dt;
+      plane.vy -= (plane.vy / speed) * inducedMag * dt;
+
+      // Apply lift perpendicular to velocity
       const nx = -plane.vy / speed;
       const ny =  plane.vx / speed;
-
       plane.vx += nx * liftMag * dt;
       plane.vy += ny * liftMag * dt;
     }
 
-    // --- Drag (proportional to velocity) ---
+    // Linear drag
     plane.vx -= plane.vx * plane.drag * dt;
     plane.vy -= plane.vy * plane.drag * dt;
 
-// Extra damping when you're not on the power (helps speed fall to 0)
-const idleFactor = 1 - plane.throttle; // 1 when throttle=0, 0 when throttle=1
-const extra = plane.idleDrag * idleFactor;
-plane.vx -= plane.vx * extra * dt;
-plane.vy -= plane.vy * extra * dt;
+    // Extra damping off-throttle (lets speed go to 0)
+    const idleFactor = 1 - plane.throttle;
+    const extra = plane.idleDrag * idleFactor;
+    plane.vx -= plane.vx * extra * dt;
+    plane.vy -= plane.vy * extra * dt;
 
-    // Quadratic drag (damps high-speed wobble)
-const speedNow = Math.hypot(plane.vx, plane.vy);
-const q = plane.quadDrag * speedNow;
-plane.vx -= plane.vx * q * dt;
-plane.vy -= plane.vy * q * dt;
+    // Quadratic drag (stability at higher speed)
+    const speedNow = Math.hypot(plane.vx, plane.vy);
+    const q = plane.quadDrag * speedNow;
+    plane.vx -= plane.vx * q * dt;
+    plane.vy -= plane.vy * q * dt;
 
-// Snap tiny speeds to zero (prevents "forever drift")
-if (Math.abs(plane.vx) < 0.5) plane.vx = 0;
-if (Math.abs(plane.vy) < 0.5) plane.vy = 0;
+    // Max speed clamp (requested)
+    const s = Math.hypot(plane.vx, plane.vy);
+    if (s > plane.maxSpeed) {
+      const k = plane.maxSpeed / s;
+      plane.vx *= k;
+      plane.vy *= k;
+    }
 
+    // Snap tiny speeds to zero (prevents forever drift)
+    if (Math.abs(plane.vx) < 0.5) plane.vx = 0;
+    if (Math.abs(plane.vy) < 0.5) plane.vy = 0;
 
     // Integrate
     plane.x += plane.vx * dt;
     plane.y += plane.vy * dt;
 
-    // Ground collision (flat)
+    // Collision vs terrain
+    const groundY = groundYAt(plane.x);
     const planeBottom = plane.y + plane.h * 0.5;
-    if (planeBottom >= world.groundY) {
-      // Crash/restart for Step 1 (instant)
-      reset();
+    if (planeBottom >= groundY) {
+      reset(); // instant reset for now
       return;
     }
 
@@ -357,25 +395,40 @@ if (Math.abs(plane.vy) < 0.5) plane.vy = 0;
 
   // ---------- Rendering ----------
   function render() {
-    // Clear screen (in screen space)
     ctx.clearRect(0, 0, W(), H());
 
-    // World-to-screen transform via camera
+    // World transform
     ctx.save();
     ctx.translate(-cam.x, -cam.y);
 
-    // Draw sky gradient-ish band (simple)
-    // (We’ll keep visuals minimal; vibe later)
-    // Ground
-    ctx.fillStyle = "rgba(255,255,255,0.10)";
-    ctx.fillRect(cam.x - 2000, world.groundY, 6000, 2000);
+    // Visible window in world coords
+    const x0 = cam.x - 200;
+    const x1 = cam.x + W() + 200;
 
-    // Runway line
+    // Draw terrain
+    ctx.fillStyle = "rgba(255,255,255,0.10)";
+    ctx.beginPath();
+
+    // Start from bottom-left
+    ctx.moveTo(x0, cam.y + H() + 800);
+
+    // Trace ground line
+    const step = 20;
+    for (let x = x0; x <= x1; x += step) {
+      ctx.lineTo(x, groundYAt(x));
+    }
+
+    // Close down to bottom-right
+    ctx.lineTo(x1, cam.y + H() + 800);
+    ctx.closePath();
+    ctx.fill();
+
+    // Runway line (flat part at start)
     ctx.strokeStyle = "rgba(255,255,255,0.25)";
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(cam.x - 2000, world.groundY);
-    ctx.lineTo(cam.x + 6000, world.groundY);
+    ctx.moveTo(0, terrain.baseY);
+    ctx.lineTo(terrain.flatUntilX, terrain.baseY);
     ctx.stroke();
 
     // Plane
@@ -383,7 +436,6 @@ if (Math.abs(plane.vy) < 0.5) plane.vy = 0;
     ctx.translate(plane.x, plane.y);
     ctx.rotate(plane.angle);
 
-    // body
     ctx.fillStyle = "rgba(255,255,255,0.90)";
     ctx.fillRect(-plane.w/2, -plane.h/2, plane.w, plane.h);
 
@@ -391,21 +443,26 @@ if (Math.abs(plane.vy) < 0.5) plane.vy = 0;
     ctx.fillStyle = "rgba(0,0,0,0.5)";
     ctx.fillRect(plane.w/2 - 6, -plane.h/2, 6, plane.h);
 
+    // tiny “thrust” hint
+    if (plane.throttle > 0.05) {
+      ctx.fillStyle = "rgba(255,180,80,0.85)";
+      ctx.fillRect(-plane.w/2 - 14, -4, 14 * plane.throttle, 8);
+    }
+
     ctx.restore(); // plane
     ctx.restore(); // world
 
-    // HUD (screen space)
+    // HUD
+    const speed = Math.hypot(plane.vx, plane.vy);
+    const agl = Math.max(0, groundYAt(plane.x) - (plane.y + plane.h * 0.5));
+
     ctx.fillStyle = "rgba(255,255,255,0.85)";
     ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
-    const speed = Math.hypot(plane.vx, plane.vy);
-    const agl = Math.max(0, world.groundY - (plane.y + plane.h * 0.5));
-
     ctx.fillText(
       `Throttle: ${(plane.throttle*100).toFixed(0)}%  |  Speed: ${speed.toFixed(0)} px/s  |  AGL: ${agl.toFixed(0)} px  |  R = reset`,
       14, 22
     );
-    ctx.fillText(`Controls: Space/→ throttle, ↑/↓ (W/S) pitch`, 14, 42);
-
+    ctx.fillText(`Desktop: Space throttle, ↑/↓ pitch   •   Mobile: Left throttle, Right pitch`, 14, 42);
   }
 
   reset();
@@ -414,6 +471,3 @@ if (Math.abs(plane.vy) < 0.5) plane.vy = 0;
 </script>
 </body>
 </html>
-
-
-
