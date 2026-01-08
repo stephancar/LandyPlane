@@ -188,6 +188,12 @@
 
     inducedDrag: 0.0012, // drag proportional to lift^2 (tune)
 maxAoA: 0.75,        // radians (~43°) clamp angle-of-attack
+
+    liftSmooth: 18,     // higher = snappier, lower = smoother
+liftMagSmoothed: 0, // internal state
+
+quadDrag: 0.0012, // tune: high-speed damping
+    
   };
 
   // ---------- Camera ----------
@@ -293,6 +299,11 @@ plane.vy -= (plane.vy / speed) * induced * dt;
       let liftMag = (speed * speed) * plane.lift * Math.sin(aoa) * stallFactor;
       liftMag = Math.max(-plane.maxLift, Math.min(plane.maxLift, liftMag));
 
+// Smooth lift to avoid high-speed jitter (prevents sign flipping chaos)
+const a = 1 - Math.exp(-plane.liftSmooth * dt);
+plane.liftMagSmoothed += (liftMag - plane.liftMagSmoothed) * a;
+liftMag = plane.liftMagSmoothed;
+      
 // Lift-induced drag: producing lift costs speed (prevents infinite climb)
 // Scales with lift^2 and acts opposite velocity.
 const inducedMag = plane.inducedDrag * (liftMag * liftMag); // always positive
@@ -317,6 +328,12 @@ const idleFactor = 1 - plane.throttle; // 1 when throttle=0, 0 when throttle=1
 const extra = plane.idleDrag * idleFactor;
 plane.vx -= plane.vx * extra * dt;
 plane.vy -= plane.vy * extra * dt;
+
+    // Quadratic drag (damps high-speed wobble)
+const speedNow = Math.hypot(plane.vx, plane.vy);
+const q = plane.quadDrag * speedNow;
+plane.vx -= plane.vx * q * dt;
+plane.vy -= plane.vy * q * dt;
 
 // Snap tiny speeds to zero (prevents "forever drift")
 if (Math.abs(plane.vx) < 0.5) plane.vx = 0;
@@ -397,5 +414,6 @@ if (Math.abs(plane.vy) < 0.5) plane.vy = 0;
 </script>
 </body>
 </html>
+
 
 
