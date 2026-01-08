@@ -169,6 +169,114 @@
     gravity: 900, // px/s^2
   };
 
+  // ---------- Scoring + Gates ----------
+  const score = {
+    points: 0,
+    combo: 0,
+    mult: 1,
+    lastGateTime: 0,   // for combo timeout
+    popups: []         // {x,y,text,ttl}
+  };
+
+  const gates = {
+    items: [],
+
+    // tuning
+    spacingMin: 260,
+    spacingMax: 420,
+    width: 46,      // half-width of gate opening
+    height: 140,    // opening height
+    marginAboveGround: 60,
+    marginFromTop: 80,
+    lookAhead: 2200,
+
+    idCounter: 1
+  };
+
+  function rand(min, max) { return min + (max - min) * rng(); }
+
+  function addPopup(x, y, text) {
+    score.popups.push({ x, y, text, ttl: 0.9 });
+  }
+
+  function awardGatePoints(gate) {
+    const now = performance.now() / 1000;
+    const comboTimeout = 2.2; // seconds allowed between gates
+
+    if (now - score.lastGateTime <= comboTimeout) {
+      score.combo += 1;
+    } else {
+      score.combo = 1;
+    }
+
+    score.lastGateTime = now;
+    score.mult = 1 + Math.min(1.5, (score.combo - 1) * 0.08); // caps at +150%
+
+    const base = 100;
+    const pts = Math.round(base * score.mult);
+    score.points += pts;
+
+    addPopup(gate.x, gate.yTop + gates.height * 0.5, `+${pts}  x${score.mult.toFixed(2)}`);
+  }
+
+  function spawnGateAtX(x) {
+    // Gate is a vertical "window" you must fly through.
+    // We'll place it relative to terrain, so it stays plausible.
+    const ground = groundYAt(x);
+
+    // Choose an opening center Y that is above ground but below top of screen area.
+    // We'll bias around mid-height of the current camera view later; for now use terrain-based band.
+    const minCenter = ground - (gates.marginAboveGround + gates.height * 0.5);
+    const maxCenter = ground - (gates.marginAboveGround + gates.height * 0.5) - 220; // allow higher gates too
+
+    // If maxCenter ends up above minCenter (terrain too high), just clamp to a safe spot
+    let centerY = lerp(minCenter, maxCenter, rng());
+    centerY = Math.min(minCenter, Math.max(120, centerY));
+
+    const gate = {
+      id: gates.idCounter++,
+      x,
+      yTop: centerY - gates.height * 0.5,
+      passed: false
+    };
+    gates.items.push(gate);
+  }
+
+  function ensureGatesAhead() {
+    const startX = plane.x;
+    const endX = plane.x + gates.lookAhead;
+
+    // Remove old gates behind camera/player
+    const keepBehind = 400;
+    gates.items = gates.items.filter(g => g.x > startX - keepBehind);
+
+    // Spawn forward until we cover endX
+    let lastX = gates.items.length ? gates.items[gates.items.length - 1].x : (plane.x + 220);
+    while (lastX < endX) {
+      lastX += rand(gates.spacingMin, gates.spacingMax);
+      spawnGateAtX(lastX);
+    }
+  }
+
+  function checkGatePass() {
+    // Simple AABB check between plane point and gate window.
+    // We'll treat plane as a point at its center for MVP.
+    const px = plane.x;
+    const py = plane.y;
+
+    for (const g of gates.items) {
+      if (g.passed) continue;
+
+      // gate window rectangle:
+      // x in [g.x - width, g.x + width], y in [g.yTop, g.yTop + height]
+      if (px >= g.x - gates.width && px <= g.x + gates.width &&
+          py >= g.yTop && py <= g.yTop + gates.height) {
+        g.passed = true;
+        awardGatePoints(g);
+      }
+    }
+  }
+  
   // ---------- Input ----------
   const keys = new Set();
   window.addEventListener("keydown", (e) => {
@@ -272,6 +380,16 @@
     cam.x = 0;
     cam.y = 0;
 
+      score.points = 0;
+    score.combo = 0;
+    score.mult = 1;
+    score.lastGateTime = 0;
+    score.popups.length = 0;
+
+    gates.items.length = 0;
+    gates.idCounter = 1;
+    ensureGatesAhead();  
+
     // Ensure terrain exists around start & ahead
     ensureTerrainToX(plane.x + 2000);
   }
@@ -312,6 +430,9 @@
     // Ensure terrain ahead for collision + drawing
     ensureTerrainToX(plane.x + 2200);
 
+    ensureGatesAhead();
+    
+    
     // Speed/directions
     const speed = Math.hypot(plane.vx, plane.vy);
     const fx = Math.cos(plane.angle);
@@ -382,6 +503,8 @@
     plane.x += plane.vx * dt;
     plane.y += plane.vy * dt;
 
+    checkGatePass();
+    
     // Collision vs terrain
     const groundY = groundYAt(plane.x);
     const planeBottom = plane.y + plane.h * 0.5;
@@ -390,6 +513,10 @@
       return;
     }
 
+    // Update popups
+    for (const p of score.popups) p.ttl -= dt;
+    score.popups = score.popups.filter(p => p.ttl > 0);
+    
     cam.follow(dt);
   }
 
@@ -431,6 +558,38 @@
     ctx.lineTo(terrain.flatUntilX, terrain.baseY);
     ctx.stroke();
 
+    // Gates
+    for (const g of gates.items) {
+      const x = g.x;
+
+      // gate posts
+      ctx.strokeStyle = g.passed ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.55)";
+      ctx.lineWidth = 3;
+
+      ctx.beginPath();
+      ctx.moveTo(x - gates.width, g.yTop);
+      ctx.lineTo(x - gates.width, g.yTop + gates.height);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(x + gates.width, g.yTop);
+      ctx.lineTo(x + gates.width, g.yTop + gates.height);
+      ctx.stroke();
+
+      // subtle top/bottom markers
+      ctx.strokeStyle = g.passed ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.25)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x - gates.width, g.yTop);
+      ctx.lineTo(x + gates.width, g.yTop);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(x - gates.width, g.yTop + gates.height);
+      ctx.lineTo(x + gates.width, g.yTop + gates.height);
+      ctx.stroke();
+    }
+    
     // Plane
     ctx.save();
     ctx.translate(plane.x, plane.y);
@@ -450,12 +609,26 @@
     }
 
     ctx.restore(); // plane
+
+        // Popups (world space)
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    for (const p of score.popups) {
+      const rise = (1 - p.ttl / 0.9) * 24;
+      ctx.fillText(p.text, p.x - 30, p.y - 18 - rise);
+    }
+    
     ctx.restore(); // world
 
     // HUD
     const speed = Math.hypot(plane.vx, plane.vy);
     const agl = Math.max(0, groundYAt(plane.x) - (plane.y + plane.h * 0.5));
+    ctx.fillText(
+      `Score: ${score.points}  |  Combo: ${score.combo}  |  Mult: x${score.mult.toFixed(2)}`,
+      14, 62
+    );
 
+    
     ctx.fillStyle = "rgba(255,255,255,0.85)";
     ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
     ctx.fillText(
@@ -471,3 +644,4 @@
 </script>
 </body>
 </html>
+
