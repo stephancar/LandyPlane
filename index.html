@@ -21,9 +21,10 @@
   gap: 12px;
   pointer-events: auto;
 }
+    
+    .touch-left{ left: 16px; flex-direction: column; }
 
-.touch-left{ left: 16px; flex-direction: column; }
-.touch-right{ right: 16px; }
+.touch-right{ right: 16px; flex-direction: column; }
 
 .btn{
   width: 72px;
@@ -67,13 +68,15 @@
 <body>
 <canvas id="c"></canvas>
 <div id="touchUI" class="touch-ui" aria-hidden="true">
+  <!-- LEFT: throttle -->
   <div class="touch-left">
-    <button class="btn" data-touch="pitchUp">▲</button>
-    <button class="btn" data-touch="pitchDown">▼</button>
+    <button class="btn throttle" data-touch="throttle">THROTTLE</button>
   </div>
 
+  <!-- RIGHT: pitch -->
   <div class="touch-right">
-    <button class="btn throttle" data-touch="throttle">THROTTLE</button>
+    <button class="btn" data-touch="pitchUp">▲</button>
+    <button class="btn" data-touch="pitchDown">▼</button>
   </div>
 
   <div class="touch-hint">Best in landscape • Hold buttons</div>
@@ -183,9 +186,8 @@
     maxLift: 9000,    // cap so it doesn't go infinite at high speed
     stallSpeed: 220,  // px/s; below this you get much less lift
 
-    inducedDrag: 1.6, // extra drag when AoA is high (tune)
-
-
+    inducedDrag: 0.0012, // drag proportional to lift^2 (tune)
+maxAoA: 0.75,        // radians (~43°) clamp angle-of-attack
   };
 
   // ---------- Camera ----------
@@ -269,6 +271,10 @@
       // wrap aoa into [-pi, pi] for stability
       aoa = Math.atan2(Math.sin(aoa), Math.cos(aoa));
 
+      // Clamp AoA so you can't generate absurd lift forever
+aoa = Math.max(-plane.maxAoA, Math.min(plane.maxAoA, aoa));
+
+      
 // Induced drag: pitching up/down (high AoA) costs speed.
 // 0 at aoa=0, max near +/-90° (we’ll clamp effect later if needed)
 const aoaAmount = Math.abs(Math.sin(aoa)); // 0..1
@@ -287,6 +293,12 @@ plane.vy -= (plane.vy / speed) * induced * dt;
       let liftMag = (speed * speed) * plane.lift * Math.sin(aoa) * stallFactor;
       liftMag = Math.max(-plane.maxLift, Math.min(plane.maxLift, liftMag));
 
+// Lift-induced drag: producing lift costs speed (prevents infinite climb)
+// Scales with lift^2 and acts opposite velocity.
+const inducedMag = plane.inducedDrag * (liftMag * liftMag); // always positive
+plane.vx -= (plane.vx / speed) * inducedMag * dt;
+plane.vy -= (plane.vy / speed) * inducedMag * dt;
+      
       // Apply lift perpendicular to velocity (rotate velocity by -90 degrees).
       // Perp unit vector: (-vy/s, vx/s)
       const nx = -plane.vy / speed;
@@ -385,4 +397,5 @@ if (Math.abs(plane.vy) < 0.5) plane.vy = 0;
 </script>
 </body>
 </html>
+
 
