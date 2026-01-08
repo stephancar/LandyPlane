@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bush Pilot — MVP Step 1</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #0b1020; color: #fff; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<script>
+(() => {
+  // ---------- Canvas ----------
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+
+  function resize() {
+    // Render at device pixel ratio for crispness
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    canvas.width  = Math.floor(window.innerWidth * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS pixels
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  const W = () => window.innerWidth;
+  const H = () => window.innerHeight;
+
+  // ---------- World ----------
+  const world = {
+    groundY: 420, // world-space y (down is +)
+    gravity: 900, // px/s^2
+  };
+
+  // ---------- Input ----------
+  const keys = new Set();
+  window.addEventListener("keydown", (e) => {
+    keys.add(e.code);
+    // prevent page scroll on arrows/space
+    if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Space"].includes(e.code)) e.preventDefault();
+    // quick reset
+    if (e.code === "KeyR") reset();
+  });
+  window.addEventListener("keyup", (e) => keys.delete(e.code));
+
+  const input = {
+    get throttleUp() { return keys.has("Space") || keys.has("ArrowRight"); }, // hold to increase
+    get pitchUp()    { return keys.has("ArrowUp") || keys.has("KeyW"); },
+    get pitchDown()  { return keys.has("ArrowDown") || keys.has("KeyS"); },
+  };
+
+  // ---------- Plane ----------
+  const plane = {
+    // world-space
+    x: 120,
+    y: 260,
+    vx: 0,
+    vy: 0,
+
+    angle: 0,       // radians
+    angVel: 0,      // rad/s
+
+    throttle: 0,    // 0..1
+
+    // tuning
+    w: 56,
+    h: 18,
+    thrust: 3200,   // px/s^2-ish
+    drag: 1.6,      // simple air drag coefficient
+
+    pitchRate: 2.4, // rad/s target
+    angDamp: 8.0,   // damp angular velocity
+    throttleUpRate: 0.8,   // per second
+    throttleDownRate: 1.2, // per second   <-- comma added here ✅
+
+    lift: 2.2,        // lift strength (tune this)
+    maxLift: 9000,    // cap so it doesn't go infinite at high speed
+    stallSpeed: 220,  // px/s; below this you get much less lift
+
+
+  };
+
+  // ---------- Camera ----------
+  const cam = {
+    x: 0,
+    y: 0,
+    // We follow plane with a small offset so you see ahead
+    follow(dt) {
+      const targetX = plane.x - W() * 0.30;
+      const targetY = plane.y - H() * 0.55;
+
+      // smooth follow
+      const k = 6.0; // follow strength
+      this.x += (targetX - this.x) * (1 - Math.exp(-k * dt));
+      this.y += (targetY - this.y) * (1 - Math.exp(-k * dt));
+    }
+  };
+
+  function reset() {
+    plane.x = 120;
+    plane.y = 260;
+    plane.vx = 0;
+    plane.vy = 0;
+    plane.angle = 0;
+    plane.angVel = 0;
+    plane.throttle = 0;
+    cam.x = 0;
+    cam.y = 0;
+  }
+
+  // ---------- Simulation ----------
+  let last = performance.now();
+
+  function step(now) {
+    const dt = Math.min(1/30, (now - last) / 1000); // clamp dt for stability
+    last = now;
+
+    update(dt);
+    render();
+
+    requestAnimationFrame(step);
+  }
+
+  function update(dt) {
+    // Throttle: hold to increase, release to decrease
+    if (input.throttleUp) {
+      plane.throttle = Math.min(1, plane.throttle + plane.throttleUpRate * dt);
+    } else {
+      plane.throttle = Math.max(0, plane.throttle - plane.throttleDownRate * dt);
+    }
+
+    // Pitch: adjust angle directly (arcade feel, easy for Step 1)
+    let pitchInput = 0;
+    if (input.pitchUp) pitchInput -= 1;
+    if (input.pitchDown) pitchInput += 1;
+
+    // target angular velocity based on input, damp for stability
+    const targetAngVel = pitchInput * plane.pitchRate;
+    plane.angVel += (targetAngVel - plane.angVel) * (1 - Math.exp(-plane.angDamp * dt));
+    plane.angle += plane.angVel * dt;
+
+    // Gravity
+    plane.vy += world.gravity * dt;
+
+        // --- Speed & directions ---
+    const speed = Math.hypot(plane.vx, plane.vy);
+    const fx = Math.cos(plane.angle);
+    const fy = Math.sin(plane.angle);
+
+    // --- Thrust (forward) ---
+    plane.vx += fx * (plane.thrust * plane.throttle) * dt;
+    plane.vy += fy * (plane.thrust * plane.throttle) * dt;
+
+    // --- Lift (arcade, speed-based) ---
+    // Idea: lift grows ~ speed^2 and depends on "angle of attack" (nose vs airflow).
+    // Airflow direction is opposite velocity.
+    if (speed > 1) {
+      const velAngle = Math.atan2(plane.vy, plane.vx);
+      let aoa = plane.angle - velAngle; // angle of attack in radians
+
+      // wrap aoa into [-pi, pi] for stability
+      aoa = Math.atan2(Math.sin(aoa), Math.cos(aoa));
+
+      // Stall factor: below stallSpeed, lift ramps down strongly
+      const stallFactor = Math.min(1, speed / plane.stallSpeed);
+
+      // Lift magnitude: speed^2 * liftCoef * sin(aoa) (signed)
+      // sin(aoa) gives "pull up" when nose is above airflow.
+      let liftMag = (speed * speed) * plane.lift * Math.sin(aoa) * stallFactor;
+      liftMag = Math.max(-plane.maxLift, Math.min(plane.maxLift, liftMag));
+
+      // Apply lift perpendicular to velocity (rotate velocity by -90 degrees).
+      // Perp unit vector: (-vy/s, vx/s)
+      const nx = -plane.vy / speed;
+      const ny =  plane.vx / speed;
+
+      plane.vx += nx * liftMag * dt;
+      plane.vy += ny * liftMag * dt;
+    }
+
+    // --- Drag (proportional to velocity) ---
+    plane.vx -= plane.vx * plane.drag * dt;
+    plane.vy -= plane.vy * plane.drag * dt;
+
+
+    // Integrate
+    plane.x += plane.vx * dt;
+    plane.y += plane.vy * dt;
+
+    // Ground collision (flat)
+    const planeBottom = plane.y + plane.h * 0.5;
+    if (planeBottom >= world.groundY) {
+      // Crash/restart for Step 1 (instant)
+      reset();
+      return;
+    }
+
+    cam.follow(dt);
+  }
+
+  // ---------- Rendering ----------
+  function render() {
+    // Clear screen (in screen space)
+    ctx.clearRect(0, 0, W(), H());
+
+    // World-to-screen transform via camera
+    ctx.save();
+    ctx.translate(-cam.x, -cam.y);
+
+    // Draw sky gradient-ish band (simple)
+    // (We’ll keep visuals minimal; vibe later)
+    // Ground
+    ctx.fillStyle = "rgba(255,255,255,0.10)";
+    ctx.fillRect(cam.x - 2000, world.groundY, 6000, 2000);
+
+    // Runway line
+    ctx.strokeStyle = "rgba(255,255,255,0.25)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cam.x - 2000, world.groundY);
+    ctx.lineTo(cam.x + 6000, world.groundY);
+    ctx.stroke();
+
+    // Plane
+    ctx.save();
+    ctx.translate(plane.x, plane.y);
+    ctx.rotate(plane.angle);
+
+    // body
+    ctx.fillStyle = "rgba(255,255,255,0.90)";
+    ctx.fillRect(-plane.w/2, -plane.h/2, plane.w, plane.h);
+
+    // nose marker
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(plane.w/2 - 6, -plane.h/2, 6, plane.h);
+
+    ctx.restore(); // plane
+    ctx.restore(); // world
+
+    // HUD (screen space)
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    const speed = Math.hypot(plane.vx, plane.vy);
+    const agl = Math.max(0, world.groundY - (plane.y + plane.h * 0.5));
+
+    ctx.fillText(
+      `Throttle: ${(plane.throttle*100).toFixed(0)}%  |  Speed: ${speed.toFixed(0)} px/s  |  AGL: ${agl.toFixed(0)} px  |  R = reset`,
+      14, 22
+    );
+    ctx.fillText(`Controls: Space/→ throttle, ↑/↓ (W/S) pitch`, 14, 42);
+
+  }
+
+  reset();
+  requestAnimationFrame(step);
+})();
+</script>
+</body>
+</html>
