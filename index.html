@@ -71,16 +71,19 @@
     w: 56,
     h: 18,
     thrust: 3200,   // px/s^2-ish
-    drag: 1.6,      // simple air drag coefficient
+    drag: 0.6,      // simple air drag coefficient
+    idleDrag: 2.2,
 
     pitchRate: 2.4, // rad/s target
     angDamp: 8.0,   // damp angular velocity
     throttleUpRate: 0.8,   // per second
     throttleDownRate: 1.2, // per second   <-- comma added here ✅
 
-    lift: 2.2,        // lift strength (tune this)
+    lift: 0.8,        // lift strength (tune this)
     maxLift: 9000,    // cap so it doesn't go infinite at high speed
     stallSpeed: 220,  // px/s; below this you get much less lift
+
+    inducedDrag: 1.6, // extra drag when AoA is high (tune)
 
 
   };
@@ -166,6 +169,16 @@
       // wrap aoa into [-pi, pi] for stability
       aoa = Math.atan2(Math.sin(aoa), Math.cos(aoa));
 
+// Induced drag: pitching up/down (high AoA) costs speed.
+// 0 at aoa=0, max near +/-90° (we’ll clamp effect later if needed)
+const aoaAmount = Math.abs(Math.sin(aoa)); // 0..1
+const induced = plane.inducedDrag * aoaAmount * speed; // proportional to speed
+
+// Apply induced drag opposite velocity
+plane.vx -= (plane.vx / speed) * induced * dt;
+plane.vy -= (plane.vy / speed) * induced * dt;
+
+
       // Stall factor: below stallSpeed, lift ramps down strongly
       const stallFactor = Math.min(1, speed / plane.stallSpeed);
 
@@ -186,6 +199,16 @@
     // --- Drag (proportional to velocity) ---
     plane.vx -= plane.vx * plane.drag * dt;
     plane.vy -= plane.vy * plane.drag * dt;
+
+// Extra damping when you're not on the power (helps speed fall to 0)
+const idleFactor = 1 - plane.throttle; // 1 when throttle=0, 0 when throttle=1
+const extra = plane.idleDrag * idleFactor;
+plane.vx -= plane.vx * extra * dt;
+plane.vy -= plane.vy * extra * dt;
+
+// Snap tiny speeds to zero (prevents "forever drift")
+if (Math.abs(plane.vx) < 0.5) plane.vx = 0;
+if (Math.abs(plane.vy) < 0.5) plane.vy = 0;
 
 
     // Integrate
