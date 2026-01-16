@@ -2,13 +2,33 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+
+  <!-- ✅ Mobile: non-zoomable "app-like" viewport -->
+  <meta name="viewport"
+        content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+
   <title>2D Cessna-ish Lift/Drag/Thrust Stall Sim</title>
   <style>
-    html,body{height:100%;margin:0;background:#0b1020;color:#eaf0ff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
+    html,body{
+      height:100%;
+      margin:0;
+      background:#0b1020;
+      color:#eaf0ff;
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
+      overscroll-behavior:none;
+      touch-action: manipulation; /* reduce double-tap zoom */
+    }
     canvas{display:block;width:100vw;height:100vh}
+
+    :root{
+      --padL: calc(16px + env(safe-area-inset-left));
+      --padR: calc(16px + env(safe-area-inset-right));
+      --padT: calc(16px + env(safe-area-inset-top));
+      --padB: calc(16px + env(safe-area-inset-bottom));
+    }
+
     .hud{
-      position:fixed; left:16px; top:16px; right:16px;
+      position:fixed; left:var(--padL); top:var(--padT); right:var(--padR);
       display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start;
       pointer-events:none;
     }
@@ -29,8 +49,8 @@
     .bad{color:#ff7b7b}
 
     .help{
-      position:fixed; left:16px; bottom:16px;
-      max-width: 640px;
+      position:fixed; left:var(--padL); bottom:calc(var(--padB) + 110px);
+      max-width: 680px;
       background:rgba(255,255,255,.06);
       border:1px solid rgba(255,255,255,.12);
       border-radius:14px;
@@ -43,8 +63,8 @@
     kbd{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);border-bottom-width:2px;padding:2px 6px;border-radius:8px}
 
     .ui{
-      position:fixed; right:16px; top:16px;
-      width:min(320px, calc(100vw - 32px));
+      position:fixed; right:var(--padR); top:var(--padT);
+      width:min(320px, calc(100vw - var(--padL) - var(--padR)));
       background:rgba(255,255,255,.08);
       border:1px solid rgba(255,255,255,.14);
       border-radius:14px;
@@ -65,10 +85,61 @@
       border:1px solid rgba(255,255,255,.18);
       background:rgba(255,255,255,.10);
       color:#eaf0ff;
-      padding:8px 10px;
+      padding:10px 10px;
       cursor:pointer;
+      -webkit-tap-highlight-color: transparent;
     }
     .ui button:hover{background:rgba(255,255,255,.14)}
+
+    /* --- Touch controls overlay --- */
+    .touch-ui{
+      position:fixed;
+      left:var(--padL);
+      right:var(--padR);
+      bottom:var(--padB);
+      height:96px;
+      display:none; /* enabled on touch devices via JS */
+      gap:12px;
+      pointer-events:auto;
+      user-select:none;
+    }
+    .touch-ui .col{display:flex; gap:12px; align-items:stretch}
+    .touch-ui .grow{flex:1}
+    .touch-ui button{
+      height:96px;
+      min-width:86px;
+      border-radius:18px;
+      border:1px solid rgba(255,255,255,.18);
+      background:rgba(0,0,0,.25);
+      color:#eaf0ff;
+      font-weight:700;
+      font-size:16px;
+      box-shadow: 0 12px 40px rgba(0,0,0,.35);
+      -webkit-tap-highlight-color: transparent;
+      touch-action: none; /* prevent scrolling */
+    }
+    .touch-ui button:active{transform: translateY(1px); background:rgba(0,0,0,.32)}
+    .touch-ui .stack{display:flex; flex-direction:column; gap:12px}
+    .touch-ui .stack button{
+      height:42px;
+      min-width:110px;
+      font-size:14px;
+      border-radius:16px;
+    }
+    .pill{
+      display:inline-flex; align-items:center; justify-content:center;
+      padding:4px 10px; border-radius:999px;
+      background:rgba(255,255,255,.10);
+      border:1px solid rgba(255,255,255,.16);
+      font-size:12px; opacity:.9;
+    }
+
+    /* Small screens: collapse HUD cards a bit */
+    @media (max-width: 560px){
+      .card{min-width: 190px}
+      .help{display:none} /* save space; touch UI covers bottom */
+      .ui{width:min(320px, calc(100vw - 24px))}
+    }
   </style>
 </head>
 <body>
@@ -86,22 +157,28 @@
   </div>
   <label for="warp">Time warp (simulation speed)</label>
   <input id="warp" type="range" min="0.5" max="3.0" step="0.1" value="1.5" />
-  <div class="small">Tip: 1.0× is real-time-ish. 1.5–2.0× feels better visually.</div>
+  <div class="small">On mobile, use the on-screen controls at the bottom.</div>
   <div class="btnrow">
     <button id="resetBtn" type="button">Reset</button>
-    <button id="trimBtn" type="button" title="Sets pitch rate to zero (simple 'hands off' helper)">Zero Q</button>
+    <button id="trimBtn" type="button" title="Sets pitch rate to zero">Zero Q</button>
   </div>
 </div>
 
-<div class="help">
-  <div class="title">Controls</div>
-  <div class="muted">
-    <div><kbd>↑</kbd>/<kbd>↓</kbd> = elevator (pitch control)</div>
-    <div><kbd>Space</kbd> = throttle up &nbsp;&nbsp; <kbd>Shift</kbd>+<kbd>Space</kbd> = throttle down</div>
-    <div><kbd>R</kbd> = reset</div>
+<!-- ✅ Touch controls (only shown on touch devices) -->
+<div class="touch-ui" id="touchUI">
+  <div class="col grow">
+    <button id="throttleUp">THROTTLE +<div class="pill" style="margin-top:6px">hold</div></button>
   </div>
-  <div class="muted" style="margin-top:8px">
-    Runway is 600 m long (scaled). Centerline dashes help show speed build-up.
+
+  <div class="col">
+    <div class="stack">
+      <button id="pitchUp">PITCH ▲</button>
+      <button id="pitchDown">PITCH ▼</button>
+    </div>
+  </div>
+
+  <div class="col grow" style="justify-content:flex-end">
+    <button id="throttleDown">THROTTLE −<div class="pill" style="margin-top:6px">hold</div></button>
   </div>
 </div>
 
@@ -118,6 +195,12 @@
   const resetBtn = document.getElementById('resetBtn');
   const trimBtn = document.getElementById('trimBtn');
 
+  const touchUI = document.getElementById('touchUI');
+  const btnThrottleUp = document.getElementById('throttleUp');
+  const btnThrottleDown = document.getElementById('throttleDown');
+  const btnPitchUp = document.getElementById('pitchUp');
+  const btnPitchDown = document.getElementById('pitchDown');
+
   // --- Resize ---
   function resize(){
     const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
@@ -132,15 +215,13 @@
   // Parameters (C172-ish)
   // ------------------------------
   const P = {
-    // Mass & geometry
-    m: 1100,                 // kg (typical loaded)
-    S: 16.2,                 // m^2 wing area
-    cbar: 1.5,               // m
-    Iyy: 1850,               // kg*m^2
+    m: 1100,
+    S: 16.2,
+    cbar: 1.5,
+    Iyy: 1850,
 
-    // Aero
     CL0: 0.28,
-    CLalpha: 5.4,            // per rad
+    CLalpha: 5.4,
     CLmax: 1.50,
     alpha_stall: 15 * Math.PI/180,
     alpha_zero_lift: -2 * Math.PI/180,
@@ -151,38 +232,30 @@
     postStallLiftDrop: 0.55,
     postStallDragBoost: 1.8,
 
-    // Pitch moments
     Cm0: 0.03,
     Cmalpha: -0.75,
     Cm_q: -12.0,
     Cm_de: -1.1,
 
-    // Engine/prop
-    Pmax: 120000,            // W
+    Pmax: 120000,
     propEff: 0.80,
-    Tmax_static: 2600,       // N
+    Tmax_static: 2600,
 
-    // Atmosphere
     rho0: 1.225,
     Hscale: 8500,
 
-    // Ground / gear
-    gearHeight: 1.35,        // m
+    gearHeight: 1.35,
     muRoll: 0.03,
     groundRestitution: 0.0,
 
-    // World scenery (real-ish sizes)
-    runwayLength: 600,       // m (your ask)
-    runwayWidth: 18,         // m (typical small runway)
-    runwayStartX: -40,       // m (start slightly before plane)
+    runwayLength: 600,
+    runwayWidth: 18,
+    runwayStartX: -40,
+
     g: 9.80665,
   };
 
-  // ------------------------------
-  // State (2D)
-  // y is altitude of body reference point (near CG).
-  // On ground, y clamped to gearHeight.
-  // ------------------------------
+  // State
   const state = {
     x: 0,
     y: P.gearHeight,
@@ -193,10 +266,7 @@
     throttle: 0.0,
   };
 
-  // Sim settings
-  const sim = {
-    timeWarp: parseFloat(warpEl.value) || 1.5,
-  };
+  const sim = { timeWarp: parseFloat(warpEl.value) || 1.5 };
 
   function reset(){
     state.x = 0;
@@ -219,7 +289,7 @@
   updateWarpReadout();
 
   // ------------------------------
-  // Input
+  // Keyboard + touch input state
   // ------------------------------
   const keys = new Set();
   addEventListener('keydown', (e) => {
@@ -228,6 +298,27 @@
     if (['ArrowUp','ArrowDown','Space'].includes(e.code)) e.preventDefault();
   }, {passive:false});
   addEventListener('keyup', (e) => keys.delete(e.code));
+
+  // Touch flags (continuous while held)
+  const touch = { throttleUp:false, throttleDown:false, pitchUp:false, pitchDown:false };
+
+  function bindHold(btn, onDown, onUp){
+    const down = (e)=>{ e.preventDefault(); onDown(); };
+    const up   = (e)=>{ e.preventDefault(); onUp(); };
+    btn.addEventListener('pointerdown', down);
+    btn.addEventListener('pointerup', up);
+    btn.addEventListener('pointercancel', up);
+    btn.addEventListener('pointerleave', up);
+  }
+
+  bindHold(btnThrottleUp,   ()=>touch.throttleUp=true,   ()=>touch.throttleUp=false);
+  bindHold(btnThrottleDown, ()=>touch.throttleDown=true, ()=>touch.throttleDown=false);
+  bindHold(btnPitchUp,      ()=>touch.pitchUp=true,      ()=>touch.pitchUp=false);
+  bindHold(btnPitchDown,    ()=>touch.pitchDown=true,    ()=>touch.pitchDown=false);
+
+  // Show touch controls on touch-capable devices
+  const isTouch = matchMedia('(pointer:coarse)').matches || ('ontouchstart' in window);
+  if (isTouch) touchUI.style.display = 'flex';
 
   // ------------------------------
   // Helpers
@@ -266,22 +357,13 @@
     return CD;
   }
 
-  // ------------------------------
-  // Clouds + background anchors
-  // ------------------------------
-  // We draw procedural "cloud blobs" in screen-space, but offset them by a parallax based on world x.
+  // Clouds (screen-ish, parallax by world x)
   const clouds = (() => {
-    // fixed pseudo-random clouds
     const arr = [];
     let seed = 1337;
     const rnd = () => (seed = (seed*1664525 + 1013904223) >>> 0) / 4294967296;
     for (let i=0;i<14;i++){
-      arr.push({
-        x: rnd()*2000 - 800,
-        y: rnd()*240 + 40,
-        s: rnd()*0.9 + 0.6,
-        a: rnd()*0.25 + 0.10
-      });
+      arr.push({ x:rnd()*2000-800, y:rnd()*240+40, s:rnd()*0.9+0.6, a:rnd()*0.25+0.10 });
     }
     return arr;
   })();
@@ -295,17 +377,23 @@
     lastT = now;
     const dt = clamp(rawDt * sim.timeWarp, 0, 0.033);
 
-    // Controls
+    // Elevator input from keyboard OR touch
     let deCmd = 0;
-    if (keys.has('ArrowUp'))   deCmd += 1;
-    if (keys.has('ArrowDown')) deCmd -= 1;
+    if (keys.has('ArrowUp') || touch.pitchUp)   deCmd += 1;
+    if (keys.has('ArrowDown') || touch.pitchDown) deCmd -= 1;
     const de = clamp(deCmd * (12*Math.PI/180), -(12*Math.PI/180), (12*Math.PI/180));
 
-    // Throttle changes
+    // Throttle change from keyboard OR touch
     const throttleRate = 0.35;
     const shift = keys.has('ShiftLeft') || keys.has('ShiftRight');
-    if (keys.has('Space') && shift) state.throttle -= throttleRate * dt;
-    else if (keys.has('Space'))     state.throttle += throttleRate * dt;
+    const kbDown = keys.has('Space') && shift;
+    const kbUp   = keys.has('Space') && !shift;
+
+    const upHeld = kbUp || touch.throttleUp;
+    const dnHeld = kbDown || touch.throttleDown;
+
+    if (dnHeld) state.throttle -= throttleRate * dt;
+    else if (upHeld) state.throttle += throttleRate * dt;
     state.throttle = clamp(state.throttle, 0, 1);
 
     // Kinematics
@@ -348,7 +436,7 @@
     let Fx = Fx_aero + Tx;
     let Fy = Fy_aero + Ty + Wy;
 
-    // Integrate translation
+    // Integrate
     state.vx += (Fx / P.m) * dt;
     state.vy += (Fy / P.m) * dt;
     state.x  += state.vx * dt;
@@ -358,20 +446,17 @@
     const onGround = state.y <= P.gearHeight + 1e-6;
     if (state.y < P.gearHeight) {
       state.y = P.gearHeight;
-      if (state.vy < 0) state.vy = -state.vy * P.groundRestitution;
+      if (state.vy < 0) state.vy = 0;
     }
 
     if (onGround) {
       if (state.vy < 0) state.vy = 0;
-
-      // Approx normal force
       const liftY = Fy_aero;
       const thrustY = Ty;
       let N = (P.m * P.g) - (liftY + thrustY);
       N = Math.max(0, N);
 
-      const Fr = P.muRoll * N; // rolling resistance
-
+      const Fr = P.muRoll * N;
       if (Math.abs(state.vx) > 0.01) {
         const s = Math.sign(state.vx);
         const dv = (Fr / P.m) * dt;
@@ -401,23 +486,21 @@
   function draw(V, gamma, alpha, rho, CL, CD, L, D, T, stalled, onGround){
     const w = innerWidth, h = innerHeight;
 
-    // Camera scale: px per meter (smaller = zoomed out)
+    // Camera scale (px per meter)
     const scale = 6;
 
-    // Camera anchor
     const cx = w*0.35;
     const cy = h*0.55;
 
     const camX = state.x;
     const camY = state.y;
 
-    // World->screen helpers
     const sx = (wx) => cx + (wx - camX) * scale;
-    const sy = (wy) => cy + (camY - wy) * scale; // higher world y => up
+    const sy = (wy) => cy + (camY - wy) * scale;
 
     ctx.clearRect(0,0,w,h);
 
-    // Lighter sky gradient (your ask)
+    // Sky
     const grd = ctx.createLinearGradient(0,0,0,h);
     grd.addColorStop(0, '#8fd0ff');
     grd.addColorStop(0.55, '#bfe7ff');
@@ -425,26 +508,22 @@
     ctx.fillStyle = grd;
     ctx.fillRect(0,0,w,h);
 
-    // Clouds: move relative to airplane speed via world-x parallax.
-    // If the plane moves forward (x increases), clouds shift left in screen.
-    drawClouds(scale, camX);
+    // Clouds parallax
+    drawClouds(camX);
 
-    // Ground line in screen (ground at y = gearHeight for body reference)
     const groundLineY = sy(P.gearHeight);
 
-    // Distant background strip (parallax)
-    drawBackgroundHousesTrees(scale, camX, groundLineY);
+    drawBackground(groundLineY);
 
     // Ground
     ctx.fillStyle = 'rgba(20,28,24,.55)';
     ctx.fillRect(0, groundLineY, w, h-groundLineY);
 
-    // Runway (600 m), scaled correctly by `scale` because it’s drawn in world meters.
-    drawRunway(scale, camX, groundLineY);
+    // Runway
+    drawRunway(groundLineY);
 
-    // Plane screen position
-    const px = cx;
-    const py = cy;
+    // Plane position on screen
+    const px = cx, py = cy;
 
     // Flight path vector
     ctx.globalAlpha = 0.55;
@@ -456,32 +535,28 @@
     ctx.stroke();
     ctx.globalAlpha = 1;
 
-    // Plane body & landing gear
+    // Plane
     ctx.save();
     ctx.translate(px, py);
     ctx.rotate(-state.theta);
 
-    // Fuselage
     ctx.fillStyle = stalled ? 'rgba(255,90,90,.95)' : 'rgba(255,255,255,.95)';
     ctx.strokeStyle = 'rgba(0,0,0,.30)';
     ctx.lineWidth = 2;
     roundRect(ctx, -40, -7, 90, 14, 8);
-    ctx.fill();
-    ctx.stroke();
+    ctx.fill(); ctx.stroke();
 
-    // Wing (high wing)
     ctx.fillStyle = 'rgba(255,255,255,.70)';
     roundRect(ctx, -10, -22, 55, 10, 6);
     ctx.fill();
 
-    // Tail
     ctx.fillStyle = 'rgba(255,255,255,.70)';
     roundRect(ctx, -45, -4, 18, 8, 4);
     ctx.fill();
     roundRect(ctx, -42, -18, 8, 16, 4);
     ctx.fill();
 
-    // Landing gear
+    // Gear
     const gearColor = onGround ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.55)';
     ctx.strokeStyle = 'rgba(0,0,0,.35)';
     ctx.lineWidth = 2;
@@ -499,7 +574,7 @@
     wheel(23, 20, 5);
     wheel(46, 18, 4);
 
-    // Prop blur
+    // Prop
     ctx.globalAlpha = 0.45 + 0.55*state.throttle;
     ctx.strokeStyle = 'rgba(255,255,255,.95)';
     ctx.lineWidth = 2;
@@ -510,7 +585,7 @@
 
     ctx.restore();
 
-    // HUD
+    // HUD text
     const kts = V * 1.94384;
     const fpm = state.vy * 196.8504;
     const altFt = (state.y - P.gearHeight) * 3.28084;
@@ -540,23 +615,12 @@
       <div class="row"><span class="muted">ρ</span><span>${rho.toFixed(3)} kg/m³</span></div>
     `;
 
-    // Stall overlay cue
     if (stalled){
       ctx.globalAlpha = 0.55;
       ctx.fillStyle = 'rgba(255,90,90,.10)';
       ctx.fillRect(0,0,w,h);
       ctx.globalAlpha = 1;
     }
-
-    // Velocity vector
-    ctx.globalAlpha = 0.35;
-    ctx.strokeStyle = 'rgba(0,0,0,.35)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(px, py);
-    ctx.lineTo(px + state.vx*0.8, py - state.vy*0.8);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
 
     function wheel(x,y,r){
       ctx.beginPath();
@@ -565,12 +629,8 @@
       ctx.stroke();
     }
 
-    // ---- scenery helpers ----
-    function drawClouds(scale, camX){
-      // Clouds are in "screen space bands" but their x is offset by world x parallax.
-      // Parallax factor: 0.15 means they move slowly vs ground.
+    function drawClouds(camX){
       const par = 0.15;
-
       for (const c of clouds){
         const x = (c.x - camX*par) % (w + 600);
         const px = x < -300 ? x + (w + 600) : x;
@@ -584,7 +644,6 @@
         blob(px-55*s, py+12*s, 58*s, 22*s);
         ctx.globalAlpha = 1;
       }
-
       function blob(x,y,rx,ry){
         ctx.beginPath();
         ctx.ellipse(x,y,rx,ry,0,0,Math.PI*2);
@@ -592,18 +651,14 @@
       }
     }
 
-    function drawBackgroundHousesTrees(scale, camX, groundLineY){
-      // Parallax layers: far hills, then trees/houses.
-      // We draw them near the horizon area.
-      const horizonY = groundLineY - 120;
-
-      // Far haze
+    function drawBackground(groundLineY){
+      // haze
       ctx.globalAlpha = 0.20;
       ctx.fillStyle = '#5fb7d8';
-      ctx.fillRect(0, 0, w, horizonY);
+      ctx.fillRect(0, 0, w, groundLineY - 120);
       ctx.globalAlpha = 1;
 
-      // Far hills (parallax 0.25)
+      // hills
       const hillPar = 0.25;
       ctx.globalAlpha = 0.35;
       ctx.fillStyle = '#2c6f86';
@@ -619,40 +674,28 @@
       ctx.fill();
       ctx.globalAlpha = 1;
 
-      // Mid layer: trees + houses (parallax 0.45)
-      const midPar = 0.45;
+      // trees/houses
       const baseY = groundLineY - 30;
-
-      // draw repeated "scene items" every ~120m
-      // we compute world X for screen positions and place items at those world coords.
       const leftWorld = camX - (cx/scale) - 200;
       const rightWorld = camX + ((w - cx)/scale) + 200;
-
       const step = 120;
       const start = Math.floor(leftWorld/step)*step;
 
       for (let wx = start; wx <= rightWorld; wx += step){
         const pxm = sx(wx);
-        const jitter = Math.sin(wx*0.07) * 18; // deterministic-ish
+        const jitter = Math.sin(wx*0.07) * 18;
         const x1 = pxm + jitter;
 
-        // Trees
         drawTree(x1 - 30, baseY, 1.0 + 0.15*Math.sin(wx*0.02));
         drawTree(x1 + 10, baseY, 0.9 + 0.10*Math.cos(wx*0.025));
-
-        // A small house occasionally
-        if ((Math.floor(wx/step) % 3) === 0){
-          drawHouse(x1 + 55, baseY+6, 1.0);
-        }
+        if ((Math.floor(wx/step) % 3) === 0) drawHouse(x1 + 55, baseY+6, 1.0);
       }
 
       function drawTree(x,y,s){
-        // trunk
         ctx.globalAlpha = 0.70;
         ctx.fillStyle = 'rgba(30,38,28,.9)';
         ctx.fillRect(x-3*s, y-18*s, 6*s, 18*s);
 
-        // canopy
         ctx.globalAlpha = 0.85;
         ctx.fillStyle = 'rgba(22,60,36,.95)';
         ctx.beginPath();
@@ -665,10 +708,8 @@
 
       function drawHouse(x,y,s){
         ctx.globalAlpha = 0.75;
-        // base
         ctx.fillStyle = 'rgba(35,35,45,.85)';
         ctx.fillRect(x, y-22*s, 34*s, 22*s);
-        // roof
         ctx.fillStyle = 'rgba(60,30,30,.85)';
         ctx.beginPath();
         ctx.moveTo(x-2*s, y-22*s);
@@ -676,55 +717,45 @@
         ctx.lineTo(x+36*s, y-22*s);
         ctx.closePath();
         ctx.fill();
-        // window
         ctx.fillStyle = 'rgba(200,230,255,.55)';
         ctx.fillRect(x+20*s, y-14*s, 8*s, 7*s);
         ctx.globalAlpha = 1;
       }
     }
 
-    function drawRunway(scale, camX, groundLineY){
-      // Runway is defined in world meters along x, centered on ground line.
+    function drawRunway(groundLineY){
       const x0 = P.runwayStartX;
       const x1 = P.runwayStartX + P.runwayLength;
-      const rw = P.runwayWidth; // meters
+      const rw = P.runwayWidth;
 
-      // Convert world to screen X extents
       const sx0 = sx(x0);
       const sx1 = sx(x1);
 
-      // Runway vertical placement: centered on ground line (top just a bit above it)
-      // We'll draw it as a rectangle "into" the ground (top at groundLineY - some pixels).
       const halfWpx = (rw * scale) * 0.5;
       const top = groundLineY - halfWpx;
       const height = halfWpx * 2;
 
-      // Shoulder / runway base
       ctx.globalAlpha = 0.95;
       ctx.fillStyle = 'rgba(40,45,55,.95)';
       ctx.fillRect(sx0, top, sx1 - sx0, height);
 
-      // Edge lines
       ctx.strokeStyle = 'rgba(255,255,255,.65)';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(sx0, top+2);
-      ctx.lineTo(sx1, top+2);
-      ctx.moveTo(sx0, top+height-2);
-      ctx.lineTo(sx1, top+height-2);
+      ctx.moveTo(sx0, top+2); ctx.lineTo(sx1, top+2);
+      ctx.moveTo(sx0, top+height-2); ctx.lineTo(sx1, top+height-2);
       ctx.stroke();
 
-      // Centerline dashes (typical-ish: 30 m dash, 20 m gap)
+      // Centerline (30m dash, 20m gap)
       const dashLen = 30;
       const gapLen  = 20;
-      const dashW   = Math.max(2, halfWpx * 0.18); // thickness
+      const dashW   = Math.max(2, halfWpx * 0.18);
       const centerY = top + height/2;
 
       ctx.strokeStyle = 'rgba(255,255,255,.80)';
       ctx.lineWidth = dashW;
       ctx.lineCap = 'butt';
 
-      // draw segments in world coords so the spacing remains proportional
       for (let wx = x0 + 10; wx < x1 - 10; wx += (dashLen + gapLen)){
         const a = sx(wx);
         const b = sx(Math.min(wx + dashLen, x1));
@@ -734,7 +765,7 @@
         ctx.stroke();
       }
 
-      // Runway end markers (simple)
+      // End markers
       ctx.globalAlpha = 0.9;
       ctx.fillStyle = 'rgba(255,255,255,.55)';
       const endMarkW = Math.max(6, 3*scale);
@@ -743,7 +774,7 @@
       ctx.fillRect(sx(x1-5), centerY - band/2, endMarkW, band);
       ctx.globalAlpha = 1;
 
-      // Subtle runway texture
+      // texture
       ctx.globalAlpha = 0.10;
       ctx.fillStyle = '#000';
       for (let i=0;i<18;i++){
