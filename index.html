@@ -2,646 +2,608 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
-  <title>Bush Pilot — MVP</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>2D Cessna-ish Lift/Drag/Thrust Stall Sim</title>
   <style>
-    html, body { margin: 0; height: 100%; background: #0b1020; color: #fff; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; overflow: hidden; }
-    canvas { display: block; width: 100vw; height: 100vh; }
+    html,body{height:100%;margin:0;background:#0b1020;color:#eaf0ff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
+    canvas{display:block;width:100vw;height:100vh}
+    .hud{
+      position:fixed; left:16px; top:16px; right:16px;
+      display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start;
+      pointer-events:none;
+    }
+    .card{
+      pointer-events:none;
+      background:rgba(255,255,255,.08);
+      border:1px solid rgba(255,255,255,.14);
+      border-radius:14px;
+      padding:10px 12px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 18px 60px rgba(0,0,0,.35);
+      min-width: 240px;
+    }
+    .title{font-weight:700;letter-spacing:.2px;margin-bottom:6px}
+    .row{display:flex;justify-content:space-between;gap:10px;font-variant-numeric:tabular-nums}
+    .muted{opacity:.75}
+    .warn{color:#ffd46a}
+    .bad{color:#ff7b7b}
 
-    /* Touch UI */
-    .touch-ui{
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      display: none;
+    .help{
+      position:fixed; left:16px; bottom:16px;
+      max-width: 640px;
+      background:rgba(255,255,255,.06);
+      border:1px solid rgba(255,255,255,.12);
+      border-radius:14px;
+      padding:10px 12px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 18px 60px rgba(0,0,0,.35);
+      line-height:1.25;
+      pointer-events:none;
     }
-    .touch-left, .touch-right{
-      position: absolute;
-      bottom: 16px;
-      display: flex;
-      gap: 12px;
-      pointer-events: auto;
-    }
-    .touch-left{ left: 16px; }
-    .touch-right{ right: 16px; flex-direction: column; }
+    kbd{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);border-bottom-width:2px;padding:2px 6px;border-radius:8px}
 
-    .btn{
-      width: 72px;
-      height: 72px;
-      border-radius: 18px;
-      border: 2px solid rgba(255,255,255,0.25);
-      background: rgba(255,255,255,0.10);
-      color: rgba(255,255,255,0.92);
-      font-size: 28px;
-      font-weight: 700;
-      touch-action: none;
-      user-select: none;
-      -webkit-user-select: none;
+    .ui{
+      position:fixed; right:16px; top:16px;
+      width:min(320px, calc(100vw - 32px));
+      background:rgba(255,255,255,.08);
+      border:1px solid rgba(255,255,255,.14);
+      border-radius:14px;
+      padding:10px 12px;
+      backdrop-filter: blur(10px);
+      box-shadow: 0 18px 60px rgba(0,0,0,.35);
+      pointer-events:auto;
+      user-select:none;
     }
-    .btn:active{ background: rgba(255,255,255,0.18); }
-    .btn.throttle{
-      width: 160px;
-      font-size: 16px;
-      letter-spacing: 0.06em;
+    .ui .title{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+    .ui label{display:block;font-size:12px;opacity:.8;margin-bottom:6px}
+    .ui input[type="range"]{width:100%}
+    .ui .small{font-size:12px;opacity:.8}
+    .ui .btnrow{display:flex;gap:8px;margin-top:10px}
+    .ui button{
+      flex:1;
+      border-radius:12px;
+      border:1px solid rgba(255,255,255,.18);
+      background:rgba(255,255,255,.10);
+      color:#eaf0ff;
+      padding:8px 10px;
+      cursor:pointer;
     }
+    .ui button:hover{background:rgba(255,255,255,.14)}
   </style>
 </head>
 <body>
-  <canvas id="c"></canvas>
+<canvas id="c"></canvas>
 
-  <div id="touchUI" class="touch-ui" aria-hidden="true">
-    <!-- LEFT: throttle -->
-    <div class="touch-left">
-      <button class="btn throttle" data-touch="throttle">THROTTLE</button>
-    </div>
+<div class="hud">
+  <div class="card" id="stats"></div>
+  <div class="card" id="aero"></div>
+</div>
 
-    <!-- RIGHT: pitch -->
-    <div class="touch-right">
-      <button class="btn" data-touch="pitchUp">▲</button>
-      <button class="btn" data-touch="pitchDown">▼</button>
-    </div>
+<div class="ui">
+  <div class="title">
+    <span style="font-weight:700">Settings</span>
+    <span class="small" id="warpReadout">Time warp: 1.0×</span>
   </div>
+  <label for="warp">Time warp (simulation speed)</label>
+  <input id="warp" type="range" min="0.5" max="3.0" step="0.1" value="1.5" />
+  <div class="small">Tip: 1.0× is real-time-ish. 1.5–2.0× feels better visually.</div>
+  <div class="btnrow">
+    <button id="resetBtn" type="button">Reset</button>
+    <button id="trimBtn" type="button" title="Sets pitch rate to zero (simple 'hands off' helper)">Zero Q</button>
+  </div>
+</div>
+
+<div class="help">
+  <div class="title">Controls</div>
+  <div class="muted">
+    <div><kbd>↑</kbd>/<kbd>↓</kbd> = elevator (pitch control)</div>
+    <div><kbd>Space</kbd> = throttle up &nbsp;&nbsp; <kbd>Shift</kbd>+<kbd>Space</kbd> = throttle down</div>
+    <div><kbd>R</kbd> = reset</div>
+  </div>
+  <div class="muted" style="margin-top:8px">
+    Starts on the ground. Add power and gently raise the nose to take off.
+  </div>
+</div>
 
 <script>
 (() => {
-  // ---------- Canvas ----------
-  const canvas = document.getElementById("c");
-  const ctx = canvas.getContext("2d");
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
 
-  function resize() {
-    const dpr = Math.max(1, window.devicePixelRatio || 1);
-    canvas.width  = Math.floor(window.innerWidth * dpr);
-    canvas.height = Math.floor(window.innerHeight * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // draw in CSS pixels
+  const statsEl = document.getElementById('stats');
+  const aeroEl  = document.getElementById('aero');
+
+  const warpEl = document.getElementById('warp');
+  const warpReadout = document.getElementById('warpReadout');
+  const resetBtn = document.getElementById('resetBtn');
+  const trimBtn = document.getElementById('trimBtn');
+
+  // --- Resize ---
+  function resize(){
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    canvas.width  = Math.floor(innerWidth * dpr);
+    canvas.height = Math.floor(innerHeight * dpr);
+    ctx.setTransform(dpr,0,0,dpr,0,0);
   }
-  window.addEventListener("resize", resize);
+  addEventListener('resize', resize);
   resize();
 
-  const W = () => window.innerWidth;
-  const H = () => window.innerHeight;
+  // ------------------------------
+  // "Typical Cessna high-wing trainer" parameters (C172-ish)
+  // ------------------------------
+  const P = {
+    // Mass & geometry
+    m: 1100,                 // kg (typical loaded)
+    S: 16.2,                 // m^2 wing area
+    cbar: 1.5,               // m mean aerodynamic chord (rough)
+    Iyy: 1850,               // kg*m^2 pitch inertia (rough)
 
-  // ---------- Simple deterministic PRNG + smooth noise ----------
-  function makeRng(seed) {
-    let t = seed >>> 0;
-    return () => {
-      // xorshift32
-      t ^= t << 13; t >>>= 0;
-      t ^= t >> 17; t >>>= 0;
-      t ^= t << 5;  t >>>= 0;
-      return (t >>> 0) / 4294967296;
-    };
-  }
-  const rng = makeRng(1337);
+    // Aero coefficients (simple but plausible)
+    CL0: 0.28,               // lift at 0 AoA (cambered wing)
+    CLalpha: 5.4,            // per rad (finite wing)
+    CLmax: 1.50,             // max lift coeff pre-stall
+    alpha_stall: 15 * Math.PI/180, // rad
+    alpha_zero_lift: -2 * Math.PI/180, // rad (cambered)
 
-  function smoothstep(t) { return t * t * (3 - 2 * t); }
-  function lerp(a, b, t) { return a + (b - a) * t; }
+    CD0: 0.030,              // parasitic drag (clean)
+    k: 0.050,                // induced drag factor (CD = CD0 + k*CL^2)
 
-  // ---------- Terrain (heightmap) ----------
-  const terrain = {
-    // We keep a flat runway region at the start, then gentle random hills
-    baseY: 420,
-    stepX: 90,          // spacing between control points
-    amp: 120,           // hill amplitude
-    maxSlopePerStep: 55,// clamp sudden jumps
-    flatUntilX: 700,    // runway length
-    points: [],         // {x,y}
+    // Post-stall behavior shaping
+    postStallLiftDrop: 0.55, // fraction of CLmax retained deep stall
+    postStallDragBoost: 1.8, // extra drag multiplier when stalled
+
+    // Pitch moment "feel" (simple stability + damping + elevator)
+    Cm0: 0.03,               // baseline moment
+    Cmalpha: -0.75,          // per rad (static stability: negative)
+    Cm_q: -12.0,             // pitch-rate damping
+    Cm_de: -1.1,             // elevator effectiveness
+
+    // Engine / prop approximation
+    Pmax: 120000,            // W (~160 hp)
+    propEff: 0.80,
+    Tmax_static: 2600,       // N approximate static thrust
+    Vthrust_ref: 25,         // m/s for low-speed thrust cap behavior
+
+    // Atmosphere
+    rho0: 1.225,             // sea level kg/m^3
+    Hscale: 8500,            // m scale height (simple exponential)
+
+    // Ground / gear contact (simple)
+    gearHeight: 1.35,        // m, body reference point above ground when on gear
+    muRoll: 0.03,            // rolling resistance coefficient (very simple)
+    muBrake: 0.25,           // (not currently used, placeholder if you add brakes)
+    groundRestitution: 0.0,  // vertical bounce (0 = none)
+
+    // Misc
+    g: 9.80665,
   };
 
-  function ensureTerrainToX(xMax) {
-    // generate points until we cover xMax + margin
-    const margin = 1400;
-    const target = xMax + margin;
-
-    if (terrain.points.length === 0) {
-      terrain.points.push({ x: 0, y: terrain.baseY });
-      terrain.points.push({ x: terrain.stepX, y: terrain.baseY });
-    }
-
-    while (terrain.points[terrain.points.length - 1].x < target) {
-      const last = terrain.points[terrain.points.length - 1];
-      const x = last.x + terrain.stepX;
-
-      let y;
-      if (x <= terrain.flatUntilX) {
-        y = terrain.baseY; // runway flat
-      } else {
-        // Gentle wandering: add a bounded random delta
-        const r = (rng() * 2 - 1); // -1..1
-        const delta = r * terrain.maxSlopePerStep;
-        y = last.y + delta;
-
-        // Pull towards base + noise band so it doesn't drift off-screen forever
-        const bandCenter = terrain.baseY + (rng() * 2 - 1) * (terrain.amp * 0.15);
-        y = lerp(y, bandCenter, 0.08);
-
-        // Clamp overall amplitude
-        const minY = terrain.baseY - terrain.amp;
-        const maxY = terrain.baseY + terrain.amp;
-        y = Math.max(minY, Math.min(maxY, y));
-      }
-
-      terrain.points.push({ x, y });
-    }
-  }
-
-  function groundYAt(x) {
-    // find segment
-    if (terrain.points.length < 2) return terrain.baseY;
-    if (x <= terrain.points[0].x) return terrain.points[0].y;
-
-    // ensure points exist ahead
-    ensureTerrainToX(x);
-
-    // binary-ish scan (small list, linear is fine)
-    let i = 0;
-    while (i < terrain.points.length - 2 && terrain.points[i + 1].x < x) i++;
-
-    const p0 = terrain.points[i];
-    const p1 = terrain.points[i + 1];
-
-    const t = (x - p0.x) / (p1.x - p0.x);
-    const s = smoothstep(Math.max(0, Math.min(1, t)));
-    return lerp(p0.y, p1.y, s);
-  }
-
-  // ---------- World ----------
-  const world = {
-    gravity: 900, // px/s^2
-  };
-
-  // ---------- Scoring + Gates ----------
-  const score = {
-    points: 0,
-    combo: 0,
-    mult: 1,
-    lastGateTime: 0,   // for combo timeout
-    popups: []         // {x,y,text,ttl}
-  };
-
-  const gates = {
-    items: [],
-
-    // tuning
-    spacingMin: 260,
-    spacingMax: 420,
-    width: 46,      // half-width of gate opening
-    height: 140,    // opening height
-    marginAboveGround: 60,
-    marginFromTop: 80,
-    lookAhead: 2200,
-
-    idCounter: 1
-  };
-
-  function rand(min, max) { return min + (max - min) * rng(); }
-
-  function addPopup(x, y, text) {
-    score.popups.push({ x, y, text, ttl: 0.9 });
-  }
-
-  function awardGatePoints(gate) {
-    const now = performance.now() / 1000;
-    const comboTimeout = 2.2; // seconds allowed between gates
-
-    if (now - score.lastGateTime <= comboTimeout) {
-      score.combo += 1;
-    } else {
-      score.combo = 1;
-    }
-
-    score.lastGateTime = now;
-    score.mult = 1 + Math.min(1.5, (score.combo - 1) * 0.08); // caps at +150%
-
-    const base = 100;
-    const pts = Math.round(base * score.mult);
-    score.points += pts;
-
-    addPopup(gate.x, gate.yTop + gates.height * 0.5, `+${pts}  x${score.mult.toFixed(2)}`);
-  }
-
-  function spawnGateAtX(x) {
-    // Gate is a vertical "window" you must fly through.
-    // We'll place it relative to terrain, so it stays plausible.
-    const ground = groundYAt(x);
-
-    // Choose an opening center Y that is above ground but below top of screen area.
-    // We'll bias around mid-height of the current camera view later; for now use terrain-based band.
-    const minCenter = ground - (gates.marginAboveGround + gates.height * 0.5);
-    const maxCenter = ground - (gates.marginAboveGround + gates.height * 0.5) - 220; // allow higher gates too
-
-    // If maxCenter ends up above minCenter (terrain too high), just clamp to a safe spot
-    let centerY = lerp(minCenter, maxCenter, rng());
-    centerY = Math.min(minCenter, Math.max(120, centerY));
-
-    const gate = {
-      id: gates.idCounter++,
-      x,
-      yTop: centerY - gates.height * 0.5,
-      passed: false
-    };
-    gates.items.push(gate);
-  }
-
-  function ensureGatesAhead() {
-    const startX = plane.x;
-    const endX = plane.x + gates.lookAhead;
-
-    // Remove old gates behind camera/player
-    const keepBehind = 400;
-    gates.items = gates.items.filter(g => g.x > startX - keepBehind);
-
-    // Spawn forward until we cover endX
-    let lastX = gates.items.length ? gates.items[gates.items.length - 1].x : (plane.x + 220);
-    while (lastX < endX) {
-      lastX += rand(gates.spacingMin, gates.spacingMax);
-      spawnGateAtX(lastX);
-    }
-  }
-
-  function checkGatePass() {
-    // Simple AABB check between plane point and gate window.
-    // We'll treat plane as a point at its center for MVP.
-    const px = plane.x;
-    const py = plane.y;
-
-    for (const g of gates.items) {
-      if (g.passed) continue;
-
-      // gate window rectangle:
-      // x in [g.x - width, g.x + width], y in [g.yTop, g.yTop + height]
-      if (px >= g.x - gates.width && px <= g.x + gates.width &&
-          py >= g.yTop && py <= g.yTop + gates.height) {
-        g.passed = true;
-        awardGatePoints(g);
-      }
-    }
-  }
-  
-  // ---------- Input ----------
-  const keys = new Set();
-  window.addEventListener("keydown", (e) => {
-    keys.add(e.code);
-    if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Space"].includes(e.code)) e.preventDefault();
-    if (e.code === "KeyR") reset();
-  });
-  window.addEventListener("keyup", (e) => keys.delete(e.code));
-
-  // ---------- Touch controls ----------
-  const touchState = { throttle: false, pitchUp: false, pitchDown: false };
-
-  const isTouch = window.matchMedia("(pointer: coarse)").matches || ("ontouchstart" in window);
-  const touchUI = document.getElementById("touchUI");
-  if (isTouch) touchUI.style.display = "block";
-
-  function setTouch(action, on) { touchState[action] = on; }
-
-  document.querySelectorAll("[data-touch]").forEach(btn => {
-    const action = btn.getAttribute("data-touch");
-    const start = (e) => { e.preventDefault(); setTouch(action, true); };
-    const end   = (e) => { e.preventDefault(); setTouch(action, false); };
-    btn.addEventListener("pointerdown", start);
-    btn.addEventListener("pointerup", end);
-    btn.addEventListener("pointercancel", end);
-    btn.addEventListener("pointerleave", end);
-  });
-
-  // prevent page scroll while playing
-  document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
-
-  const input = {
-    get throttleUp() { return keys.has("Space") || keys.has("ArrowRight") || touchState.throttle; },
-    get pitchUp()    { return keys.has("ArrowUp") || keys.has("KeyW") || touchState.pitchUp; },
-    get pitchDown()  { return keys.has("ArrowDown") || keys.has("KeyS") || touchState.pitchDown; },
-  };
-
-  // ---------- Plane ----------
-  const plane = {
-    x: 140,
-    y: 260,
-    vx: 0,
-    vy: 0,
-
-    angle: 0,
-    angVel: 0,
-
-    throttle: 0,
-
-    // visuals
-    w: 56,
-    h: 18,
-
-    // forces/tuning
-    thrust: 3200,
-    drag: 0.35,       // base linear drag
-    idleDrag: 2.2,     // extra linear drag when not throttling (lets speed go to 0)
-    quadDrag: 0.0012,  // high-speed damping
-
-    lift: 0.8,
-    maxLift: 9000,
-    stallSpeed: 220,
-
-    maxAoA: 0.75,        // AoA clamp (rad)
-    inducedDrag: 0.00000018, // lift^2 induced drag (tiny!)
-
-    // smoothing / control
-    pitchRate: 2.4,
-    angDamp: 8.0,
-    throttleUpRate: 0.8,
-    throttleDownRate: 1.2,
-
-    liftSmooth: 18,
-    liftMagSmoothed: 0,
-
-    maxSpeed: 200, // requested cap
-  };
-
-  // ---------- Camera ----------
-  const cam = {
+  // ------------------------------
+  // State (2D: x,y, vx,vy, pitch theta, pitch rate q)
+  // y is altitude of the "body reference point" (near CG).
+  // When on ground, y is clamped to gearHeight.
+  // ------------------------------
+  const state = {
     x: 0,
-    y: 0,
-    follow(dt) {
-      const targetX = plane.x - W() * 0.30;
-      const targetY = plane.y - H() * 0.55;
-      const k = 6.0;
-      this.x += (targetX - this.x) * (1 - Math.exp(-k * dt));
-      this.y += (targetY - this.y) * (1 - Math.exp(-k * dt));
-    }
+    y: P.gearHeight, // start on ground
+    vx: 0,           // stationary
+    vy: 0,
+    theta: 0,        // level
+    q: 0,
+    throttle: 0.0,   // idle
   };
 
-  function reset() {
-    plane.x = 140;
-    plane.y = 260;
-    plane.vx = 0;
-    plane.vy = 0;
-    plane.angle = 0;
-    plane.angVel = 0;
-    plane.throttle = 0;
-    plane.liftMagSmoothed = 0;
-    cam.x = 0;
-    cam.y = 0;
+  // Sim settings
+  const sim = {
+    timeWarp: parseFloat(warpEl.value) || 1.5,
+  };
 
-      score.points = 0;
-    score.combo = 0;
-    score.mult = 1;
-    score.lastGateTime = 0;
-    score.popups.length = 0;
-
-    gates.items.length = 0;
-    gates.idCounter = 1;
-    ensureGatesAhead();  
-
-    // Ensure terrain exists around start & ahead
-    ensureTerrainToX(plane.x + 2000);
+  function reset(){
+    state.x = 0;
+    state.y = P.gearHeight;
+    state.vx = 0;
+    state.vy = 0;
+    state.theta = 0;
+    state.q = 0;
+    state.throttle = 0.0;
   }
 
-  // ---------- Simulation ----------
-  let last = performance.now();
+  resetBtn.addEventListener('click', reset);
+  trimBtn.addEventListener('click', () => { state.q = 0; });
 
-  function step(now) {
-    const dt = Math.min(1/30, (now - last) / 1000);
-    last = now;
+  function updateWarpReadout(){
+    sim.timeWarp = parseFloat(warpEl.value) || 1;
+    warpReadout.textContent = `Time warp: ${sim.timeWarp.toFixed(1)}×`;
+  }
+  warpEl.addEventListener('input', updateWarpReadout);
+  updateWarpReadout();
 
-    update(dt);
-    render();
+  // ------------------------------
+  // Input
+  // ------------------------------
+  const keys = new Set();
+  addEventListener('keydown', (e) => {
+    if (e.code === 'KeyR') reset();
+    keys.add(e.code);
+    if (['ArrowUp','ArrowDown','Space'].includes(e.code)) e.preventDefault();
+  }, {passive:false});
+  addEventListener('keyup', (e) => keys.delete(e.code));
 
-    requestAnimationFrame(step);
+  // ------------------------------
+  // Helpers
+  // ------------------------------
+  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+  const lerp  = (a,b,t)=>a+(b-a)*t;
+
+  function airDensity(alt){
+    return P.rho0 * Math.exp(-alt / P.Hscale);
+  }
+  function sign(x){ return x<0?-1:1; }
+  function deg(rad){ return rad*180/Math.PI; }
+
+  function wrapPi(a){
+    while (a > Math.PI) a -= 2*Math.PI;
+    while (a < -Math.PI) a += 2*Math.PI;
+    return a;
   }
 
-  function update(dt) {
-    // Throttle ramp
-    if (input.throttleUp) {
-      plane.throttle = Math.min(1, plane.throttle + plane.throttleUpRate * dt);
+  // Stall CL shaping:
+  function computeCL(alpha){
+    const alphaEff = alpha - P.alpha_zero_lift;
+    const CL_lin = P.CL0 + P.CLalpha * alphaEff;
+
+    const CL_stall = P.CLmax * sign(CL_lin);
+    const alphaAbs = Math.abs(alpha);
+    const stallAbs = P.alpha_stall;
+
+    if (alphaAbs <= stallAbs) {
+      return clamp(CL_lin, -P.CLmax, P.CLmax);
     } else {
-      plane.throttle = Math.max(0, plane.throttle - plane.throttleDownRate * dt);
+      const over = (alphaAbs - stallAbs) / (25*Math.PI/180); // ramp over ~25deg
+      const t = clamp(over, 0, 1);
+      const CL_deep = lerp(P.CLmax, P.postStallLiftDrop * P.CLmax, t) * sign(CL_lin);
+      return CL_deep;
     }
-
-    // Pitch
-    let pitchInput = 0;
-    if (input.pitchUp) pitchInput -= 1;
-    if (input.pitchDown) pitchInput += 1;
-
-    const targetAngVel = pitchInput * plane.pitchRate;
-    plane.angVel += (targetAngVel - plane.angVel) * (1 - Math.exp(-plane.angDamp * dt));
-    plane.angle += plane.angVel * dt;
-
-    // Gravity
-    plane.vy += world.gravity * dt;
-
-    // Ensure terrain ahead for collision + drawing
-    ensureTerrainToX(plane.x + 2200);
-
-    ensureGatesAhead();
-    
-    
-    // Speed/directions
-    const speed = Math.hypot(plane.vx, plane.vy);
-    const fx = Math.cos(plane.angle);
-    const fy = Math.sin(plane.angle);
-
-    // Thrust (forward)
-    plane.vx += fx * (plane.thrust * plane.throttle) * dt;
-    plane.vy += fy * (plane.thrust * plane.throttle) * dt;
-
-    // Lift
-    if (speed > 1) {
-      const velAngle = Math.atan2(plane.vy, plane.vx);
-      let aoa = plane.angle - velAngle;
-      aoa = Math.atan2(Math.sin(aoa), Math.cos(aoa));
-      aoa = Math.max(-plane.maxAoA, Math.min(plane.maxAoA, aoa));
-
-      const stallFactor = Math.min(1, speed / plane.stallSpeed);
-
-      let liftMag = (speed * speed) * plane.lift * Math.sin(aoa) * stallFactor;
-      liftMag = Math.max(-plane.maxLift, Math.min(plane.maxLift, liftMag));
-
-      // Smooth lift to avoid high-speed jitter
-      const a = 1 - Math.exp(-plane.liftSmooth * dt);
-      plane.liftMagSmoothed += (liftMag - plane.liftMagSmoothed) * a;
-      liftMag = plane.liftMagSmoothed;
-
-      // Lift-induced drag (prevents infinite climb)
-      const inducedMag = plane.inducedDrag * (liftMag * liftMag);
-      plane.vx -= (plane.vx / speed) * inducedMag * dt;
-      plane.vy -= (plane.vy / speed) * inducedMag * dt;
-
-      // Apply lift perpendicular to velocity
-      const nx = -plane.vy / speed;
-      const ny =  plane.vx / speed;
-      plane.vx += nx * liftMag * dt;
-      plane.vy += ny * liftMag * dt;
-    }
-
-    // Linear drag
-    plane.vx -= plane.vx * plane.drag * dt;
-    plane.vy -= plane.vy * plane.drag * dt;
-
-    // Extra damping off-throttle (lets speed go to 0)
-    const idleFactor = 1 - plane.throttle;
-    const extra = plane.idleDrag * idleFactor;
-    plane.vx -= plane.vx * extra * dt;
-    plane.vy -= plane.vy * extra * dt;
-
-    // Quadratic drag (stability at higher speed)
-    const speedNow = Math.hypot(plane.vx, plane.vy);
-    const q = plane.quadDrag * speedNow;
-    plane.vx -= plane.vx * q * dt;
-    plane.vy -= plane.vy * q * dt;
-
-    // Max speed clamp (requested)
-    const s = Math.hypot(plane.vx, plane.vy);
-    if (s > plane.maxSpeed) {
-      const k = plane.maxSpeed / s;
-      plane.vx *= k;
-      plane.vy *= k;
-    }
-
-    // Snap tiny speeds to zero (prevents forever drift)
-    if (Math.abs(plane.vx) < 0.5) plane.vx = 0;
-    if (Math.abs(plane.vy) < 0.5) plane.vy = 0;
-
-    // Integrate
-    plane.x += plane.vx * dt;
-    plane.y += plane.vy * dt;
-
-    checkGatePass();
-    
-    // Collision vs terrain
-    const groundY = groundYAt(plane.x);
-    const planeBottom = plane.y + plane.h * 0.5;
-    if (planeBottom >= groundY) {
-      reset(); // instant reset for now
-      return;
-    }
-
-    // Update popups
-    for (const p of score.popups) p.ttl -= dt;
-    score.popups = score.popups.filter(p => p.ttl > 0);
-    
-    cam.follow(dt);
   }
 
-  // ---------- Rendering ----------
-  function render() {
-    ctx.clearRect(0, 0, W(), H());
+  function computeCD(CL, stalled){
+    let CD = P.CD0 + P.k * CL*CL;
+    if (stalled) CD *= P.postStallDragBoost;
+    return CD;
+  }
 
-    // World transform
-    ctx.save();
-    ctx.translate(-cam.x, -cam.y);
+  // ------------------------------
+  // Simulation loop
+  // ------------------------------
+  let lastT = performance.now();
+  function tick(now){
+    const rawDt = clamp((now - lastT) / 1000, 0, 0.033);
+    lastT = now;
 
-    // Visible window in world coords
-    const x0 = cam.x - 200;
-    const x1 = cam.x + W() + 200;
+    // Time warp (UI controlled)
+    const dt = clamp(rawDt * sim.timeWarp, 0, 0.033);
 
-    // Draw terrain
-    ctx.fillStyle = "rgba(255,255,255,0.10)";
-    ctx.beginPath();
+    // Controls
+    let deCmd = 0;
+    if (keys.has('ArrowUp'))   deCmd += 1;
+    if (keys.has('ArrowDown')) deCmd -= 1;
+    const de = clamp(deCmd * (12*Math.PI/180), -(12*Math.PI/180), (12*Math.PI/180));
 
-    // Start from bottom-left
-    ctx.moveTo(x0, cam.y + H() + 800);
+    // Throttle changes
+    const throttleRate = 0.35;
+    const shift = keys.has('ShiftLeft') || keys.has('ShiftRight');
+    if (keys.has('Space') && shift) {
+      state.throttle -= throttleRate * dt;
+    } else if (keys.has('Space')) {
+      state.throttle += throttleRate * dt;
+    }
+    state.throttle = clamp(state.throttle, 0, 1);
 
-    // Trace ground line
-    const step = 20;
-    for (let x = x0; x <= x1; x += step) {
-      ctx.lineTo(x, groundYAt(x));
+    // Velocity / flight path
+    const V = Math.max(0.1, Math.hypot(state.vx, state.vy));
+    const gamma = Math.atan2(state.vy, state.vx);
+    const alpha = wrapPi(state.theta - gamma);
+
+    // Atmosphere
+    const rho = airDensity(Math.max(0, state.y - P.gearHeight));
+
+    // Aero
+    const CL = computeCL(alpha);
+    const stalled = Math.abs(alpha) > P.alpha_stall;
+    const CD = computeCD(CL, stalled);
+
+    const qbar = 0.5 * rho * V*V;
+    const L = qbar * P.S * CL;
+    const D = qbar * P.S * CD;
+
+    // Directions
+    const vx = state.vx, vy = state.vy;
+    const invV = 1 / V;
+    const ux = vx * invV, uy = vy * invV; // unit along velocity
+    const nx = -uy, ny = ux;              // unit normal
+
+    const Fx_aero = (-D)*ux + (L)*nx;
+    const Fy_aero = (-D)*uy + (L)*ny;
+
+    // Thrust from power approximation
+    const Pshaft = P.Pmax * state.throttle;
+    const T_power = (P.propEff * Pshaft) / Math.max(V, 12);
+    const T_cap = lerp(P.Tmax_static, P.Tmax_static*0.55, clamp((V - 5)/35, 0, 1));
+    const T = clamp(T_power, 0, T_cap);
+
+    const Tx = T * Math.cos(state.theta);
+    const Ty = T * Math.sin(state.theta);
+
+    // Weight
+    const Wx = 0;
+    const Wy = -P.m * P.g;
+
+    // Net forces
+    let Fx = Fx_aero + Tx + Wx;
+    let Fy = Fy_aero + Ty + Wy;
+
+    // Integrate translational
+    let ax = Fx / P.m;
+    let ay = Fy / P.m;
+
+    state.vx += ax * dt;
+    state.vy += ay * dt;
+    state.x  += state.vx * dt;
+    state.y  += state.vy * dt;
+
+    // --- Ground + landing gear contact ---
+    // Ground is at y = gearHeight for the CG/body reference point.
+    // If below: clamp, zero downward velocity, apply rolling resistance.
+    const onGround = state.y <= P.gearHeight + 1e-6;
+
+    if (state.y < P.gearHeight) {
+      state.y = P.gearHeight;
+      if (state.vy < 0) state.vy = -state.vy * P.groundRestitution;
     }
 
-    // Close down to bottom-right
-    ctx.lineTo(x1, cam.y + H() + 800);
-    ctx.closePath();
-    ctx.fill();
+    // Rolling resistance while on ground (very simple)
+    if (onGround) {
+      // Cancel any remaining tiny downward drift
+      if (state.vy < 0) state.vy = 0;
 
-    // Runway line (flat part at start)
-    ctx.strokeStyle = "rgba(255,255,255,0.25)";
+      // Approx normal force ~ weight minus upward aero/thrust components (clamped >=0)
+      // We'll approximate using current vertical net without the ground reaction:
+      // N ≈ max(0, W - (Lift_vertical + Thrust_vertical))
+      const liftY = Fy_aero; // already in world coords
+      const thrustY = Ty;
+      let N = (P.m * P.g) - (liftY + thrustY);
+      N = Math.max(0, N);
+
+      // Rolling resistance force magnitude
+      const Fr = P.muRoll * N;
+
+      // Apply opposite to x velocity (or x-axis if nearly stopped)
+      if (Math.abs(state.vx) > 0.01) {
+        const s = Math.sign(state.vx);
+        const dv = (Fr / P.m) * dt;
+        // reduce vx toward 0 without flipping sign
+        if (Math.abs(state.vx) <= dv) state.vx = 0;
+        else state.vx -= s * dv;
+      } else {
+        // if essentially stopped, keep it stopped unless thrust overcomes static-ish roll
+        if (Math.abs(Tx) < Fr) state.vx = 0;
+      }
+    }
+
+    // Pitch dynamics
+    const qHat = (state.q * P.cbar) / Math.max(2*V, 1);
+    const Cm = P.Cm0 + P.Cmalpha*alpha + P.Cm_q*qHat + P.Cm_de*de;
+    const M = qbar * P.S * P.cbar * Cm;
+    const qdot = M / P.Iyy;
+
+    state.q += qdot * dt;
+    state.theta = wrapPi(state.theta + state.q * dt);
+
+    // Visual + HUD
+    draw(V, gamma, alpha, rho, CL, CD, L, D, T, stalled, onGround);
+
+    requestAnimationFrame(tick);
+  }
+
+  // ------------------------------
+  // Rendering
+  // ------------------------------
+  function draw(V, gamma, alpha, rho, CL, CD, L, D, T, stalled, onGround){
+    const w = innerWidth, h = innerHeight;
+
+    // Camera scale: smaller = zoomed out = looks faster.
+    const scale = 5; // px per meter (adjust for feel)
+
+    const cx = w*0.35;
+    const cy = h*0.55;
+
+    // Camera follows plane
+    const camX = state.x;
+    const camY = state.y;
+
+    ctx.clearRect(0,0,w,h);
+
+    // Background gradient
+    const grd = ctx.createLinearGradient(0,0,0,h);
+    grd.addColorStop(0, '#070a14');
+    grd.addColorStop(1, '#0b1636');
+    ctx.fillStyle = grd;
+    ctx.fillRect(0,0,w,h);
+
+    // Horizon line (ground reference y = gearHeight in world coordinates for body ref)
+    const groundY = cy + (camY - P.gearHeight) * scale;
+
+    // faint horizon
+    ctx.globalAlpha = 0.18;
+    ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(0, terrain.baseY);
-    ctx.lineTo(terrain.flatUntilX, terrain.baseY);
+    ctx.moveTo(0, groundY);
+    ctx.lineTo(w, groundY);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Ground fill
+    ctx.fillStyle = 'rgba(0,0,0,.35)';
+    ctx.fillRect(0, groundY, w, h-groundY);
+
+    // Simple terrain bumps
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = '#0a0f22';
+    ctx.beginPath();
+    ctx.moveTo(0, h);
+    for (let i=0;i<=w;i+=40){
+      const wx = (camX - (cx - i)/scale);
+      const bump = 8*Math.sin(wx*0.002) + 5*Math.sin(wx*0.005 + 2);
+      ctx.lineTo(i, groundY - bump);
+    }
+    ctx.lineTo(w, h);
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    // Plane screen position (center-ish)
+    const px = cx;
+    const py = cy;
+
+    // Flight path vector
+    ctx.globalAlpha = 0.45;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(px + Math.cos(gamma)*70, py - Math.sin(gamma)*70);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // Plane body & landing gear
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(-state.theta);
+
+    // Fuselage
+    ctx.fillStyle = stalled ? 'rgba(255,123,123,.95)' : 'rgba(234,240,255,.92)';
+    ctx.strokeStyle = 'rgba(0,0,0,.35)';
+    ctx.lineWidth = 2;
+    roundRect(ctx, -40, -7, 90, 14, 8);
+    ctx.fill();
     ctx.stroke();
 
-    // Gates
-    for (const g of gates.items) {
-      const x = g.x;
+    // Wing (high wing)
+    ctx.fillStyle = 'rgba(255,255,255,.55)';
+    roundRect(ctx, -10, -22, 55, 10, 6);
+    ctx.fill();
 
-      // gate posts
-      ctx.strokeStyle = g.passed ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.55)";
-      ctx.lineWidth = 3;
+    // Tail
+    ctx.fillStyle = 'rgba(255,255,255,.5)';
+    roundRect(ctx, -45, -4, 18, 8, 4);
+    ctx.fill();
+    roundRect(ctx, -42, -18, 8, 16, 4);
+    ctx.fill();
 
-      ctx.beginPath();
-      ctx.moveTo(x - gates.width, g.yTop);
-      ctx.lineTo(x - gates.width, g.yTop + gates.height);
-      ctx.stroke();
+    // Landing gear (simple tricycle: two mains + nose wheel)
+    // Coordinates relative to fuselage drawing
+    const gearColor = onGround ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.55)';
+    ctx.strokeStyle = 'rgba(0,0,0,.35)';
+    ctx.lineWidth = 2;
+    ctx.fillStyle = gearColor;
 
-      ctx.beginPath();
-      ctx.moveTo(x + gates.width, g.yTop);
-      ctx.lineTo(x + gates.width, g.yTop + gates.height);
-      ctx.stroke();
+    // struts
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    // main struts
+    ctx.moveTo(5, 6);  ctx.lineTo(0, 18);
+    ctx.moveTo(28, 6); ctx.lineTo(25, 18);
+    // nose strut
+    ctx.moveTo(46, 5); ctx.lineTo(46, 15);
+    ctx.stroke();
 
-      // subtle top/bottom markers
-      ctx.strokeStyle = g.passed ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.25)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(x - gates.width, g.yTop);
-      ctx.lineTo(x + gates.width, g.yTop);
-      ctx.stroke();
+    // wheels
+    ctx.globalAlpha = 1;
+    wheel(-2, 20, 5);
+    wheel(23, 20, 5);
+    wheel(46, 18, 4);
 
-      ctx.beginPath();
-      ctx.moveTo(x - gates.width, g.yTop + gates.height);
-      ctx.lineTo(x + gates.width, g.yTop + gates.height);
-      ctx.stroke();
-    }
-    
-    // Plane
-    ctx.save();
-    ctx.translate(plane.x, plane.y);
-    ctx.rotate(plane.angle);
+    // Prop indicator
+    ctx.globalAlpha = 0.45 + 0.55*state.throttle;
+    ctx.strokeStyle = 'rgba(255,255,255,.9)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(50, 0, 10 + 12*state.throttle, 0, Math.PI*2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
 
-    ctx.fillStyle = "rgba(255,255,255,0.90)";
-    ctx.fillRect(-plane.w/2, -plane.h/2, plane.w, plane.h);
-
-    // nose marker
-    ctx.fillStyle = "rgba(0,0,0,0.5)";
-    ctx.fillRect(plane.w/2 - 6, -plane.h/2, 6, plane.h);
-
-    // tiny “thrust” hint
-    if (plane.throttle > 0.05) {
-      ctx.fillStyle = "rgba(255,180,80,0.85)";
-      ctx.fillRect(-plane.w/2 - 14, -4, 14 * plane.throttle, 8);
-    }
-
-    ctx.restore(); // plane
-
-        // Popups (world space)
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
-    ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
-    for (const p of score.popups) {
-      const rise = (1 - p.ttl / 0.9) * 24;
-      ctx.fillText(p.text, p.x - 30, p.y - 18 - rise);
-    }
-    
-    ctx.restore(); // world
+    ctx.restore();
 
     // HUD
-    const speed = Math.hypot(plane.vx, plane.vy);
-    const agl = Math.max(0, groundYAt(plane.x) - (plane.y + plane.h * 0.5));
-    ctx.fillText(
-      `Score: ${score.points}  |  Combo: ${score.combo}  |  Mult: x${score.mult.toFixed(2)}`,
-      14, 62
-    );
+    const kts = V * 1.94384;
+    const fpm = state.vy * 196.8504;
+    const altFt = (state.y - P.gearHeight) * 3.28084; // altitude above ground reference
 
-    
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
-    ctx.font = "14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
-    ctx.fillText(
-      `Throttle: ${(plane.throttle*100).toFixed(0)}%  |  Speed: ${speed.toFixed(0)} px/s  |  AGL: ${agl.toFixed(0)} px  |  R = reset`,
-      14, 22
-    );
-    ctx.fillText(`Desktop: Space throttle, ↑/↓ pitch   •   Mobile: Left throttle, Right pitch`, 14, 42);
+    const stallText =
+      stalled ? `<span class="bad">STALL</span>` :
+      (Math.abs(alpha) > P.alpha_stall*0.85 ? `<span class="warn">near stall</span>` : `<span class="muted">ok</span>`);
+
+    statsEl.innerHTML = `
+      <div class="title">Flight</div>
+      <div class="row"><span class="muted">Speed</span><span>${kts.toFixed(1)} kt</span></div>
+      <div class="row"><span class="muted">Altitude AGL</span><span>${altFt.toFixed(0)} ft</span></div>
+      <div class="row"><span class="muted">V/S</span><span>${fpm.toFixed(0)} fpm</span></div>
+      <div class="row"><span class="muted">Pitch</span><span>${deg(state.theta).toFixed(1)}°</span></div>
+      <div class="row"><span class="muted">Throttle</span><span>${Math.round(state.throttle*100)}%</span></div>
+      <div class="row"><span class="muted">Ground</span><span>${onGround ? 'yes' : 'no'}</span></div>
+    `;
+
+    aeroEl.innerHTML = `
+      <div class="title">Aero</div>
+      <div class="row"><span class="muted">AoA</span><span>${deg(alpha).toFixed(1)}°</span></div>
+      <div class="row"><span class="muted">CL / CD</span><span>${CL.toFixed(2)} / ${CD.toFixed(3)}</span></div>
+      <div class="row"><span class="muted">Lift</span><span>${(L/1000).toFixed(1)} kN</span></div>
+      <div class="row"><span class="muted">Drag</span><span>${(D/1000).toFixed(1)} kN</span></div>
+      <div class="row"><span class="muted">Thrust</span><span>${(T/1000).toFixed(2)} kN</span></div>
+      <div class="row"><span class="muted">State</span><span>${stallText}</span></div>
+      <div class="row"><span class="muted">ρ</span><span>${rho.toFixed(3)} kg/m³</span></div>
+    `;
+
+    // Stall cue overlay
+    if (stalled){
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = 'rgba(255,123,123,.15)';
+      ctx.fillRect(0,0,w,h);
+      ctx.globalAlpha = 1;
+    }
+
+    // Velocity vector
+    ctx.globalAlpha = 0.35;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(px, py);
+    ctx.lineTo(px + state.vx*0.8, py - state.vy*0.8);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    function wheel(x,y,r){
+      ctx.beginPath();
+      ctx.arc(x,y,r,0,Math.PI*2);
+      ctx.fill();
+      ctx.stroke();
+    }
   }
 
-  reset();
-  requestAnimationFrame(step);
+  function roundRect(ctx, x,y,w,h,r){
+    const rr = Math.min(r, w/2, h/2);
+    ctx.beginPath();
+    ctx.moveTo(x+rr, y);
+    ctx.arcTo(x+w, y, x+w, y+h, rr);
+    ctx.arcTo(x+w, y+h, x, y+h, rr);
+    ctx.arcTo(x, y+h, x, y, rr);
+    ctx.arcTo(x, y, x+w, y, rr);
+    ctx.closePath();
+  }
+
+  requestAnimationFrame(tick);
 })();
 </script>
 </body>
 </html>
-
