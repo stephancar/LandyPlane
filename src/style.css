@@ -155,4 +155,7 @@ canvas { display: block; width: 100vw; height: 100vh; }
   .card { min-width: 165px; font-size: 13px; }
   #aero-card { display: none !important; }
   .panel { padding: 20px; }
+  /* Top bar owns the first row; HUD slides underneath it. */
+  .topbar button { padding: 7px 10px; font-size: 13px; }
+  .hud { top: calc(var(--padT) + 48px); }
 }
