@@ -49,6 +49,23 @@ threshold; then during rollout: whether the aircraft stops within the runway.
 Tiers: ≥ 90 *Buttered* · ≥ 70 *Good* · ≥ 50 *Firm* · < 50 *Ugly but alive*.
 Best score per level in `localStorage`.
 
+## Aircraft (added post-v2.0)
+
+Three selectable aircraft, chosen on the menu, each with its own physics,
+art, and per-aircraft level progression / best scores:
+
+- **Cessna 172** — the baseline trainer (prop, power-limited thrust)
+- **Carbon Cub** — STOL: stalls ~32 kt, huge static thrust, lands anywhere;
+  runways shrink to 60 % and approaches start closer
+- **F-16** — jet (near-constant thrust, slow spool), ~110 kt stall, terrible
+  glide at approach speed; runways stretch to 260 % and approaches start
+  further out. Afterburner glow above 85 % throttle.
+
+Level geometry scales per aircraft (`runwayScale`, `distanceScale`); the
+engine-out level derives its start distance from the aircraft's glide ratio
+*at approach speed* (not best-glide, which for a jet is unrealistically fast).
+Crash sink-rate limits are per aircraft (700/800/900 fpm).
+
 ## Flight model
 
 Point-mass + pitch-rate dynamics, C172-ish coefficients, from v1 but fixed:

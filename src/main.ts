@@ -5,7 +5,8 @@ import { Renderer } from './render/renderer';
 import { Input, isTouchDevice } from './input/input';
 import { Sound } from './audio/sound';
 import * as storage from './game/storage';
-import { C172, DEG, MS_TO_FPM, MS_TO_KT, M_TO_FT } from './physics/params';
+import { AIRCRAFT, DEG, MS_TO_FPM, MS_TO_KT, M_TO_FT } from './physics/params';
+import type { AircraftId, AircraftParams } from './physics/params';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -19,6 +20,11 @@ const sound = new Sound();
 
 let saveData = storage.load();
 sound.muted = saveData.muted;
+
+function selectedAircraft(): AircraftParams {
+  const id = saveData.aircraft as AircraftId;
+  return AIRCRAFT[id] ?? AIRCRAFT.c172;
+}
 
 let game: Game | null = null;
 let paused = false;
@@ -35,14 +41,34 @@ function setMuteLabel(): void {
   $('btn-mute').textContent = sound.muted ? '🔇' : '🔊';
 }
 
+function buildAircraftRow(): void {
+  const row = $('aircraft-row');
+  row.innerHTML = '';
+  for (const ac of Object.values(AIRCRAFT)) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ac-btn' + (ac.id === selectedAircraft().id ? ' selected' : '');
+    btn.id = `ac-${ac.id}`;
+    btn.innerHTML = `<div class="ac-name">${ac.label}</div><div class="ac-blurb">${ac.blurb}</div>`;
+    btn.addEventListener('click', () => {
+      saveData.aircraft = ac.id;
+      storage.save(saveData);
+      buildAircraftRow();
+      buildMenu();
+    });
+    row.appendChild(btn);
+  }
+}
+
 function buildMenu(): void {
   saveData = storage.load();
   const list = $('level-list');
   list.innerHTML = '';
+  const acId = selectedAircraft().id;
   const ids = LEVELS.map((l) => l.id);
   LEVELS.forEach((level, i) => {
-    const unlocked = storage.isUnlocked(i, ids, saveData);
-    const best = saveData.bestScores[level.id];
+    const unlocked = storage.isUnlocked(i, ids, acId, saveData);
+    const best = saveData.bestScores[storage.scoreKey(level.id, acId)];
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'level-btn';
@@ -61,6 +87,7 @@ function buildMenu(): void {
 }
 
 function openMenu(): void {
+  buildAircraftRow();
   buildMenu();
   show('menu', true);
   show('report', false);
@@ -74,7 +101,7 @@ function openMenu(): void {
 }
 
 function startLevel(level: Level): void {
-  game = new Game(level);
+  game = new Game(level, selectedAircraft());
   paused = false;
   reportShown = false;
   if (reportTimer) {
@@ -87,7 +114,7 @@ function startLevel(level: Level): void {
   show('topbar', true);
   show('help', !isTouchDevice());
   show('touch-ui', isTouchDevice());
-  $('hud-level').textContent = level.name;
+  $('hud-level').textContent = `${level.name} — ${selectedAircraft().label}`;
   show('hud-wind-row', level.wind.steady !== 0 || level.wind.gustAmplitude !== 0);
   show('aero-card', level.id === FREE_FLIGHT.id);
   location.hash = level.id;
@@ -117,12 +144,13 @@ function showReport(): void {
   const isChallenge = game.level.id !== FREE_FLIGHT.id;
   let bestNote = '';
   if (isChallenge && !r.crashed) {
-    const prevBest = storage.load().bestScores[game.level.id] ?? 0;
-    saveData = storage.recordScore(game.level.id, r.score);
+    const key = storage.scoreKey(game.level.id, game.aircraft.id);
+    const prevBest = storage.load().bestScores[key] ?? 0;
+    saveData = storage.recordScore(game.level.id, game.aircraft.id, r.score);
     bestNote =
       r.score > prevBest
-        ? `New best for ${game.level.name}!`
-        : `Best for ${game.level.name}: ${saveData.bestScores[game.level.id]}`;
+        ? `New best for ${game.level.name} (${game.aircraft.label})!`
+        : `Best for ${game.level.name} (${game.aircraft.label}): ${saveData.bestScores[key]}`;
   }
   $('report-best').textContent = bestNote;
 
@@ -184,6 +212,15 @@ $('opt-invert').addEventListener('change', (e) => {
 });
 addEventListener('pointerdown', () => sound.ensureStarted(), { once: false });
 
+// Block touch scrolling/zooming everywhere except inside menu overlays.
+document.addEventListener(
+  'touchmove',
+  (e) => {
+    if (!(e.target as HTMLElement | null)?.closest('.overlay')) e.preventDefault();
+  },
+  { passive: false },
+);
+
 setMuteLabel();
 
 // ---------- Main loop ----------
@@ -205,7 +242,10 @@ function frame(now: number): void {
 
     // Sounds
     const nearStall =
-      !!d && !s.onGround && Math.abs(d.alpha) > C172.alphaStall * STALL_WARN_FRACTION && d.airspeed > 10;
+      !!d &&
+      !s.onGround &&
+      Math.abs(d.alpha) > game.aircraft.alphaStall * STALL_WARN_FRACTION &&
+      d.airspeed > 10;
     sound.update(s.throttle, game.level.engine, nearStall);
     if (d?.touchdown) {
       sound.thump(Math.min(1, d.touchdown.sinkRate / 4));
@@ -217,7 +257,7 @@ function frame(now: number): void {
     // HUD
     if (d) {
       $('hud-speed').textContent = `${(d.airspeed * MS_TO_KT).toFixed(0)} kt`;
-      $('hud-alt').textContent = `${((s.y - C172.gearHeight) * M_TO_FT).toFixed(0)} ft`;
+      $('hud-alt').textContent = `${((s.y - game.aircraft.gearHeight) * M_TO_FT).toFixed(0)} ft`;
       $('hud-vs').textContent = `${(s.vy * MS_TO_FPM).toFixed(0)} fpm`;
       $('hud-pitch').textContent = `${(s.theta / DEG).toFixed(1)}°`;
       $('hud-throttle').textContent = `${Math.round(s.throttle * 100)}%`;

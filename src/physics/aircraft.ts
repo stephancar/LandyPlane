@@ -61,7 +61,6 @@ export function initialState(p: AircraftParams): AircraftState {
   return { x: 0, y: p.gearHeight, vx: 0, vy: 0, theta: 0, q: 0, throttle: 0, onGround: true };
 }
 
-const THROTTLE_RATE = 0.35; // fraction per second
 const MIN_AERO_SPEED = 1.0; // m/s below which aero forces are negligible
 
 /**
@@ -80,7 +79,7 @@ export function step(
   const vyBefore = s.vy;
 
   // --- Throttle ---
-  s.throttle = clamp(s.throttle + controls.throttleDelta * THROTTLE_RATE * dt, 0, 1);
+  s.throttle = clamp(s.throttle + controls.throttleDelta * p.throttleRate * dt, 0, 1);
 
   // --- Air-relative velocity ---
   const vax = s.vx - wind.wx;
@@ -118,11 +117,18 @@ export function step(
     FyAero = -drag * uy + lift * ux;
   }
 
-  // --- Thrust (power-limited, capped at static thrust that bleeds off with speed) ---
-  const Pshaft = p.Pmax * s.throttle;
-  const Tpower = (p.propEff * Pshaft) / Math.max(Va, 12);
-  const Tcap = lerp(p.TmaxStatic, p.TmaxStatic * 0.55, clamp((Va - 5) / 35, 0, 1));
-  const thrust = clamp(Tpower, 0, Tcap);
+  // --- Thrust ---
+  let thrust: number;
+  if (p.propulsion === 'jet') {
+    // Near-constant thrust, mild density lapse with altitude.
+    thrust = s.throttle * p.TmaxStatic * Math.pow(rho / 1.225, 0.7);
+  } else {
+    // Power-limited prop, capped at static thrust that bleeds off with speed.
+    const Pshaft = p.Pmax * s.throttle;
+    const Tpower = (p.propEff * Pshaft) / Math.max(Va, 12);
+    const Tcap = lerp(p.TmaxStatic, p.TmaxStatic * 0.55, clamp((Va - 5) / 35, 0, 1));
+    thrust = clamp(Tpower, 0, Tcap);
+  }
   const Tx = thrust * Math.cos(s.theta);
   const Ty = thrust * Math.sin(s.theta);
 

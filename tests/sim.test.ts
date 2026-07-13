@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Game } from '../src/game/game';
 import { FREE_FLIGHT, LEVELS, levelById } from '../src/game/levels';
-import { C172 } from '../src/physics/params';
+import { AIRCRAFT, C172 } from '../src/physics/params';
 import { approachAutopilot, flyUntilDone, takeoffAutopilot } from './helpers/autopilot';
 import { NEUTRAL } from '../src/physics/aircraft';
 
@@ -73,13 +73,45 @@ describe('flown scenarios (headless autopilot)', () => {
     expect(run()).toEqual(run());
   });
 
-  it('every level start state is airborne (except free flight) and above the glidepath floor', () => {
+  it('every challenge level starts airborne with sane speed, for every aircraft', () => {
     for (const level of LEVELS) {
-      expect(level.start).not.toBeNull();
-      expect(level.start!.y).toBeGreaterThan(C172.gearHeight + 30);
-      expect(level.start!.vx).toBeGreaterThan(20);
+      for (const ac of Object.values(AIRCRAFT)) {
+        const game = new Game(level, ac);
+        expect(game.state.y).toBeGreaterThan(ac.gearHeight + 20);
+        expect(game.state.vx).toBeGreaterThan(0.9 * game.stallSpeedMs);
+      }
     }
   });
+
+  describe.each(Object.values(AIRCRAFT).map((ac) => [ac.label, ac] as const))(
+    'aircraft: %s',
+    (_label, ac) => {
+      it('lands the trainer with a passing score', () => {
+        const game = new Game(levelById('trainer')!, ac);
+        flyUntilDone(game, approachAutopilot);
+        expect(game.phase).toBe('done');
+        expect(game.report!.crashed).toBe(false);
+        expect(game.report!.score).toBeGreaterThanOrEqual(50);
+      });
+
+      it('survives the engine-out glide', () => {
+        const game = new Game(levelById('engineout')!, ac);
+        flyUntilDone(game, approachAutopilot);
+        expect(game.phase).toBe('done');
+        expect(game.report!.crashed).toBe(false);
+      });
+
+      it('takes off in free flight', () => {
+        const game = new Game(FREE_FLIGHT, ac);
+        let climbed = false;
+        for (let i = 0; i < 120 * 90 && !climbed; i++) {
+          game.stepOnce(takeoffAutopilot(game));
+          if (game.state.y - ac.gearHeight > 30) climbed = true;
+        }
+        expect(climbed).toBe(true);
+      });
+    },
+  );
 
   it('trimmed hands-off flight is stable (no crash within a minute)', () => {
     const game = new Game(levelById('trainer')!);

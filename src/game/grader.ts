@@ -50,6 +50,7 @@ export function gradeTouchdownInstant(
   td: TouchdownEvent,
   runway: Runway,
   strictRunway: boolean,
+  crashSinkFpm: number = CRASH_SINK_FPM,
 ): { crashed: boolean; reason?: CrashReason; text?: string } {
   const sinkFpm = td.sinkRate * MS_TO_FPM;
   const pitchDeg = td.pitch / DEG;
@@ -62,11 +63,11 @@ export function gradeTouchdownInstant(
       text: `You hit the ground at ${pitchDeg.toFixed(0)}° of pitch. That is not a landing, that is an arrival.`,
     };
   }
-  if (sinkFpm > CRASH_SINK_FPM) {
+  if (sinkFpm > crashSinkFpm) {
     return {
       crashed: true,
       reason: 'hard-impact',
-      text: `Touched down at ${sinkFpm.toFixed(0)} fpm — the gear is now part of the wing. (Limit: ${CRASH_SINK_FPM} fpm.)`,
+      text: `Touched down at ${sinkFpm.toFixed(0)} fpm — the gear is now part of the wing. (Limit: ${crashSinkFpm} fpm.)`,
     };
   }
   if (pitchDeg < PROP_STRIKE_DEG) {
@@ -93,8 +94,9 @@ export function gradeLanding(
   runway: Runway,
   stallMs: number,
   strictRunway: boolean,
+  crashSinkFpm: number = CRASH_SINK_FPM,
 ): LandingReport {
-  const instant = gradeTouchdownInstant(td, runway, strictRunway);
+  const instant = gradeTouchdownInstant(td, runway, strictRunway, crashSinkFpm);
   const sinkFpm = td.sinkRate * MS_TO_FPM;
   const pitchDeg = td.pitch / DEG;
   const endX = runway.startX + runway.length;

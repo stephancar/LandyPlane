@@ -2,16 +2,18 @@
  * Test autopilot: flies approaches through the real Game loop using continuous
  * control values. Not clever — just PD loops with alpha/speed protection —
  * but good enough to verify the scenarios are winnable and the grader fires.
+ * Works for any aircraft: speeds scale with the aircraft's stall speed.
  */
 import type { Game } from '../../src/game/game';
 import type { Controls } from '../../src/physics/aircraft';
-import { C172, DEG } from '../../src/physics/params';
-import { clamp } from '../../src/physics/aero';
+import { DEG, WORLD } from '../../src/physics/params';
+import { clamp, glideRatioAt, trimAlpha } from '../../src/physics/aero';
 
 export function approachAutopilot(game: Game): Controls {
   const s = game.state;
   const d = game.derived;
-  const alt = s.y - C172.gearHeight;
+  const ac = game.aircraft;
+  const alt = s.y - ac.gearHeight;
   const vs = game.stallSpeedMs;
 
   if (s.onGround) {
@@ -21,34 +23,43 @@ export function approachAutopilot(game: Game): Controls {
 
   const va = d?.airspeed ?? Math.hypot(s.vx, s.vy);
   const alpha = d?.alpha ?? 0;
+  const vT = 1.25 * vs;
+  // Powered approaches are flown on with a short flare; dead-stick glides
+  // arrive steep and fast and need to start arresting the sink much earlier.
+  const flareAlt = game.level.engine ? Math.max(4, 0.12 * va) : Math.max(4, 0.3 * va);
   let pitch: number;
 
-  if (alt < 4) {
-    // Flare: arrest the sink just above the pavement.
-    pitch = clamp(0.9 * (-0.8 - s.vy) - 6 * s.q, -1, 1);
-  } else if (!game.level.engine) {
-    // Glide: hold approach speed with pitch and take the touchdown point we get.
-    const vT = 1.22 * vs;
-    pitch = clamp(0.25 * (va - vT) - 6 * s.q, -1, 1);
+  if (alt < flareAlt) {
+    // Flare: bleed the sink progressively as the ground approaches.
+    const vyT = -Math.max(0.6, alt * 0.25);
+    pitch = clamp(1.2 * (vyT - s.vy) - 5 * s.q, -1, 1);
   } else {
-    // Powered approach: fly a straight line to the aim point with pitch...
-    const aim = game.level.runway.startX + game.level.runway.touchdownZone * 0.4;
-    const dist = aim - s.x;
-    const vyT = dist > 20 ? clamp((-alt * Math.max(s.vx, 5)) / dist, -4.5, -0.4) : -1.5;
-    pitch = clamp(0.7 * (vyT - s.vy) - 6 * s.q, -1, 1);
+    // Attitude hold: base pitch = trim alpha on the expected descent path,
+    // nudged by the speed error (too fast -> nose up). Stable for all types.
+    const glidePath = game.level.engine ? 3.5 * DEG : 1 / glideRatioAt(vT, ac, WORLD);
+    const thetaBase = trimAlpha(vT, ac, WORLD) - glidePath;
+    const thetaT = clamp(thetaBase + 0.012 * (va - vT), thetaBase - 8 * DEG, thetaBase + 6 * DEG);
+    pitch = clamp(3 * (thetaT - s.theta) - 8 * s.q, -1, 1);
   }
 
-  // Protections: never pull into a stall, never chase vy at extreme alpha.
-  if (va < 1.12 * vs) pitch = Math.min(pitch, -0.25);
-  if (alpha > 11 * DEG) pitch = Math.min(pitch, -0.4);
+  // Protections: never pull into a stall, never hang past warning alpha.
+  // In the flare the nose may ride right up to the stall — just stop pulling.
+  if (va < 1.1 * vs && alt >= flareAlt) pitch = Math.min(pitch, -0.25);
+  if (alt < flareAlt) {
+    if (alpha > 0.97 * ac.alphaStall) pitch = Math.min(pitch, 0);
+  } else if (alpha > 0.9 * ac.alphaStall) {
+    pitch = Math.min(pitch, -0.4);
+  }
 
-  // Throttle: hold approach speed, idle in the flare (dead engine: always idle).
+  // Throttle holds the glidepath toward the aim point (backside technique).
   let throttleDelta: number;
-  if (!game.level.engine || alt < 4) {
+  if (!game.level.engine || alt < flareAlt) {
     throttleDelta = -1;
   } else {
-    const vT = 1.25 * vs;
-    throttleDelta = clamp(1.5 * (vT - va), -1, 1);
+    const aim = game.runway.startX + game.runway.touchdownZone * 0.4;
+    const dist = aim - s.x;
+    const vyT = dist > 20 ? clamp((-alt * Math.max(s.vx, 5)) / dist, -0.12 * va, -0.4) : -0.1 * va;
+    throttleDelta = clamp(0.8 * (vyT - s.vy), -1, 1);
   }
 
   return { pitch, throttleDelta, brakes: false };
@@ -56,14 +67,14 @@ export function approachAutopilot(game: Game): Controls {
 
 export function takeoffAutopilot(game: Game): Controls {
   const s = game.state;
-  const rotate = Math.hypot(s.vx, s.vy) > 30;
+  const rotate = Math.hypot(s.vx, s.vy) > 1.15 * game.stallSpeedMs;
   const thetaT = rotate ? 9 * DEG : 0;
   const pitch = clamp(3 * (thetaT - s.theta) - 6 * s.q, -1, 1);
   return { pitch, throttleDelta: 1, brakes: false };
 }
 
 /** Run the game until done or maxSeconds; returns steps taken. */
-export function flyUntilDone(game: Game, controller: (g: Game) => Controls, maxSeconds = 180): number {
+export function flyUntilDone(game: Game, controller: (g: Game) => Controls, maxSeconds = 240): number {
   let steps = 0;
   const maxSteps = Math.round(maxSeconds * 120);
   while (game.phase !== 'done' && steps < maxSteps) {

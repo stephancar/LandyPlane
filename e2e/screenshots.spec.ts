@@ -25,6 +25,17 @@ test('capture main screens', async ({ page }) => {
   await page.screenshot({ path: `${OUT}/3-takeoff-roll.png` });
   await page.keyboard.up('KeyA');
 
+  // Each aircraft on the trainer approach
+  for (const ac of ['c172', 'cub', 'f16']) {
+    await page.goto('/');
+    await page.click(`#ac-${ac}`);
+    await page.click('#level-trainer');
+    await page.waitForTimeout(800);
+    await page.screenshot({ path: `${OUT}/ac-${ac}.png` });
+  }
+  await page.goto('/');
+  await page.click('#ac-c172');
+
   // Crash + report card
   await page.goto('/#trainer');
   await page.evaluate(() => {

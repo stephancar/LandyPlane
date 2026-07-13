@@ -38,3 +38,31 @@ export function computeCD(CL: number, stalled: boolean, p: AircraftParams): numb
 export function stallSpeed(p: AircraftParams, world: WorldParams, rho = world.rho0): number {
   return Math.sqrt((2 * p.m * world.g) / (rho * p.S * p.CLmax));
 }
+
+/** Angle of attack that carries the weight at the given speed (sea level). */
+export function trimAlpha(speed: number, p: AircraftParams, world: WorldParams): number {
+  const qbarS = 0.5 * world.rho0 * speed * speed * p.S;
+  const clNeeded = (p.m * world.g) / qbarS;
+  return (clNeeded - p.CL0) / p.CLalpha;
+}
+
+/** Elevator deflection that zeroes the pitching moment at the given alpha. */
+export function trimElevator(alpha: number, p: AircraftParams): number {
+  return -(p.Cm0 + p.Cmalpha * alpha) / p.Cmde;
+}
+
+/** Best glide ratio (max L/D) for the drag polar. */
+export function bestGlideRatio(p: AircraftParams): number {
+  return 1 / (2 * Math.sqrt(p.CD0 * p.k));
+}
+
+/**
+ * L/D actually achieved gliding at the given speed (sea level, lift = weight).
+ * Draggy jets glide far worse at approach speed than at their (very fast)
+ * best-glide speed, so levels should be laid out with this, not the max.
+ */
+export function glideRatioAt(speed: number, p: AircraftParams, world: WorldParams): number {
+  const cl = (p.m * world.g) / (0.5 * world.rho0 * speed * speed * p.S);
+  const cd = p.CD0 + p.k * cl * cl;
+  return cl / cd;
+}

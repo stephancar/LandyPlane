@@ -27,13 +27,41 @@ test.describe('menu', () => {
     await page.evaluate(() => {
       localStorage.setItem(
         'landyplane.v2',
-        JSON.stringify({ bestScores: { trainer: 80 }, muted: false, invertPitch: false }),
+        JSON.stringify({ bestScores: { 'trainer@c172': 80 }, muted: false, invertPitch: false, aircraft: 'c172' }),
       );
     });
     await page.reload();
     await expect(page.locator('#level-shortfield')).toBeEnabled();
     await expect(page.locator('#level-trainer .lvl-best')).toContainText('best 80');
     await expect(page.locator('#level-gusty')).toBeDisabled();
+  });
+
+  test('progression is per aircraft and the picker persists', async ({ page }) => {
+    await page.goto('/');
+    await page.evaluate(() => {
+      localStorage.setItem(
+        'landyplane.v2',
+        JSON.stringify({ bestScores: { 'trainer@c172': 80 }, muted: false, invertPitch: false, aircraft: 'c172' }),
+      );
+    });
+    await page.reload();
+    await expect(page.locator('#ac-c172')).toHaveClass(/selected/);
+    await expect(page.locator('#level-shortfield')).toBeEnabled();
+
+    // Switching to the F-16 relocks level 2 (no F-16 trainer score yet).
+    await page.click('#ac-f16');
+    await expect(page.locator('#ac-f16')).toHaveClass(/selected/);
+    await expect(page.locator('#level-shortfield')).toBeDisabled();
+
+    await page.reload();
+    await expect(page.locator('#ac-f16')).toHaveClass(/selected/);
+  });
+
+  test('selected aircraft shows up in the flight HUD', async ({ page }) => {
+    await page.goto('/');
+    await page.click('#ac-f16');
+    await page.click('#level-trainer');
+    await expect(page.locator('#hud-level')).toHaveText('Trainer — F-16');
   });
 });
 
@@ -43,7 +71,7 @@ test.describe('flight', () => {
     await page.click('#level-trainer');
     await expect(page.locator('#menu')).toBeHidden();
     await expect(page.locator('#hud')).toBeVisible();
-    await expect(page.locator('#hud-level')).toHaveText('Trainer');
+    await expect(page.locator('#hud-level')).toHaveText('Trainer — Cessna 172');
     await expect(page.locator('#aero-card')).toBeHidden();
     await page.waitForTimeout(300);
     expect(await readSpeedKt(page)).toBeGreaterThan(40); // starts on approach at ~64 kt

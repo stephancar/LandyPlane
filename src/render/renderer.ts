@@ -1,5 +1,4 @@
 import type { Game } from '../game/game';
-import { C172 } from '../physics/params';
 import { clamp } from '../physics/aero';
 import { mulberry32 } from '../physics/wind';
 
@@ -41,23 +40,24 @@ export class Renderer {
     const ctx = this.ctx;
     const w = innerWidth;
     const h = innerHeight;
+    const s = game.state;
+    const d = game.derived;
+    const gearHeight = game.aircraft.gearHeight;
+    const crashed = (game.phase === 'done' && game.report?.crashed) ?? false;
 
-    // Self-heal if the canvas was sized while the window had no dimensions
-    // (e.g. the tab loaded in a hidden/zero-size pane).
+    // Self-heal if the canvas was sized while the window had no dimensions.
     const dpr = clamp(window.devicePixelRatio || 1, 1, 2);
     if (this.canvas.width !== Math.floor(w * dpr) || this.canvas.height !== Math.floor(h * dpr)) {
       this.resize();
     }
-    const s = game.state;
-    const d = game.derived;
-    const crashed = game.phase === 'done' && game.report?.crashed;
 
     if (crashed) this.crashT += dt;
     else this.crashT = 0;
 
-    const alt = Math.max(0, s.y - C172.gearHeight);
-    // Zoom out as the plane climbs.
-    const scale = clamp(6 / (1 + alt / 150), 2.2, 6);
+    const alt = Math.max(0, s.y - gearHeight);
+    // Zoom out as the plane climbs (faster aircraft see a bit more world).
+    const zoomRef = 150 * Math.max(1, game.aircraft.approachSpeed / 33);
+    const scale = clamp(6 / (1 + alt / zoomRef), 2.2, 6);
 
     let cx = w * 0.38;
     let cy = h * 0.55;
@@ -95,7 +95,7 @@ export class Renderer {
       ctx.fillRect(0, gY, w, Math.min(6, h - gY));
     }
 
-    this.drawScenery(gY, camX, cx, scale, sx, w);
+    this.drawScenery(gY, camX, cx, scale, sx, w, game);
     this.drawRunway(game, gY, sx, scale, w);
 
     // Flight path vector
@@ -110,11 +110,10 @@ export class Renderer {
       ctx.globalAlpha = 1;
     }
 
-    this.drawPlane(cx, cy, game, crashed ?? false);
+    this.drawPlane(cx, cy, game, crashed);
 
     if (crashed) this.drawCrashFx(cx, cy);
 
-    // Off-screen runway pointer
     this.drawRunwayPointer(game, sx, w, h);
 
     // Stall red vignette
@@ -123,6 +122,356 @@ export class Renderer {
       ctx.fillRect(0, 0, w, h);
     }
   }
+
+  // ---------- Aircraft art ----------
+
+  private drawPlane(cx: number, cy: number, game: Game, crashed: boolean): void {
+    const ctx = this.ctx;
+    const s = game.state;
+    const stalled = (game.derived?.stalled ?? false) && !s.onGround;
+
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(-s.theta + (crashed ? 0.35 : 0));
+
+    switch (game.aircraft.id) {
+      case 'cub':
+        ctx.scale(0.62, 0.62);
+        this.drawCub(s.throttle, s.onGround, stalled, crashed, game.level.engine);
+        break;
+      case 'f16':
+        ctx.scale(0.95, 0.95);
+        this.drawF16(s.throttle, s.onGround, stalled, crashed);
+        break;
+      default:
+        ctx.scale(0.75, 0.75);
+        this.drawCessna(s.throttle, s.onGround, stalled, crashed, game.level.engine);
+    }
+
+    ctx.restore();
+  }
+
+  private body(stalled: boolean, crashed: boolean, livery: string): string {
+    if (crashed) return '#84848a';
+    if (stalled) return '#ff8a8a';
+    return livery;
+  }
+
+  private drawCessna(throttle: number, onGround: boolean, stalled: boolean, crashed: boolean, engine: boolean): void {
+    const ctx = this.ctx;
+    const bodyC = this.body(stalled, crashed, '#fafafc');
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(20,25,35,.45)';
+
+    // Fuselage
+    ctx.fillStyle = bodyC;
+    ctx.beginPath();
+    ctx.moveTo(50, -2);
+    ctx.quadraticCurveTo(44, -8, 32, -9); // cowl top
+    ctx.lineTo(24, -9);
+    ctx.lineTo(14, -17); // windshield
+    ctx.lineTo(-4, -17); // cabin roof
+    ctx.quadraticCurveTo(-26, -12, -40, -5); // tail boom top
+    ctx.lineTo(-46, -4);
+    ctx.lineTo(-46, 2);
+    ctx.quadraticCurveTo(-16, 8, 6, 9); // belly rear
+    ctx.lineTo(30, 9);
+    ctx.quadraticCurveTo(46, 7, 50, 3); // cowl bottom
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Red accent stripe
+    ctx.fillStyle = crashed ? '#5c5c60' : '#c94040';
+    ctx.beginPath();
+    ctx.moveTo(46, 3);
+    ctx.quadraticCurveTo(10, 7, -44, 1);
+    ctx.lineTo(-44, -2);
+    ctx.quadraticCurveTo(10, 4, 46, 0);
+    ctx.closePath();
+    ctx.fill();
+
+    // Fin + rudder
+    ctx.fillStyle = bodyC;
+    ctx.beginPath();
+    ctx.moveTo(-34, -5);
+    ctx.lineTo(-44, -26);
+    ctx.lineTo(-51, -26);
+    ctx.lineTo(-49, -4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = crashed ? '#5c5c60' : '#c94040';
+    ctx.fillRect(-51, -26, 3, 22);
+    // Horizontal stab
+    ctx.fillStyle = bodyC;
+    this.roundRect(-54, -2, 18, 4, 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Windows
+    ctx.fillStyle = 'rgba(70,105,140,.85)';
+    ctx.beginPath();
+    ctx.moveTo(22, -9);
+    ctx.lineTo(13, -16);
+    ctx.lineTo(6, -16);
+    ctx.lineTo(6, -9);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillRect(0, -16, -10 - -4 + 4, 7); // rear side window (x -4..0 wide-ish)
+    ctx.fillRect(-3, -16, 7, 7);
+
+    // Wing on top (high wing)
+    ctx.fillStyle = bodyC;
+    this.roundRect(-14, -24, 52, 7, 4);
+    ctx.fill();
+    ctx.stroke();
+    // Strut
+    ctx.strokeStyle = 'rgba(20,25,35,.6)';
+    ctx.beginPath();
+    ctx.moveTo(8, 8);
+    ctx.lineTo(22, -17);
+    ctx.stroke();
+
+    // Gear with wheel pants
+    const gearC = onGround ? '#fafafc' : 'rgba(250,250,252,.6)';
+    ctx.strokeStyle = 'rgba(20,25,35,.5)';
+    ctx.fillStyle = gearC;
+    ctx.beginPath();
+    ctx.moveTo(2, 8);
+    ctx.lineTo(-2, 19);
+    ctx.moveTo(38, 7);
+    ctx.lineTo(38, 17);
+    ctx.stroke();
+    this.tire(-2, 21, 5);
+    this.tire(38, 19, 4);
+
+    // Spinner + prop
+    ctx.fillStyle = crashed ? '#5c5c60' : '#c94040';
+    ctx.beginPath();
+    ctx.moveTo(50, -3);
+    ctx.quadraticCurveTo(57, 0, 50, 4);
+    ctx.closePath();
+    ctx.fill();
+    if (engine && !crashed) {
+      ctx.globalAlpha = 0.35 + 0.6 * throttle;
+      ctx.strokeStyle = 'rgba(255,255,255,.9)';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(54, 0, 9 + 13 * throttle, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  private drawCub(throttle: number, onGround: boolean, stalled: boolean, crashed: boolean, engine: boolean): void {
+    const ctx = this.ctx;
+    const bodyC = this.body(stalled, crashed, '#f4c430');
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = 'rgba(60,45,10,.5)';
+
+    // Fuselage: stubby, rounded cowl, boxy cabin
+    ctx.fillStyle = bodyC;
+    ctx.beginPath();
+    ctx.moveTo(46, -4);
+    ctx.quadraticCurveTo(48, 0, 46, 6);
+    ctx.lineTo(28, 10);
+    ctx.quadraticCurveTo(-8, 12, -40, 5);
+    ctx.lineTo(-48, 3);
+    ctx.lineTo(-48, -3);
+    ctx.quadraticCurveTo(-20, -8, 0, -16); // rising back
+    ctx.lineTo(16, -16);
+    ctx.lineTo(26, -10);
+    ctx.quadraticCurveTo(40, -8, 46, -4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Fin + rudder (rounded cub tail)
+    ctx.beginPath();
+    ctx.moveTo(-32, -4);
+    ctx.quadraticCurveTo(-40, -22, -50, -22);
+    ctx.quadraticCurveTo(-54, -14, -50, -3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // Horizontal stab
+    this.roundRect(-54, -1, 20, 4, 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Windows: big greenhouse
+    ctx.fillStyle = 'rgba(80,115,150,.85)';
+    ctx.beginPath();
+    ctx.moveTo(24, -10);
+    ctx.lineTo(15, -15);
+    ctx.lineTo(-6, -14);
+    ctx.lineTo(-10, -8);
+    ctx.lineTo(24, -8);
+    ctx.closePath();
+    ctx.fill();
+
+    // High wing
+    ctx.fillStyle = bodyC;
+    this.roundRect(-18, -24, 58, 7, 3);
+    ctx.fill();
+    ctx.stroke();
+    // Double lift struts
+    ctx.strokeStyle = 'rgba(60,45,10,.6)';
+    ctx.beginPath();
+    ctx.moveTo(6, 10);
+    ctx.lineTo(20, -17);
+    ctx.moveTo(6, 10);
+    ctx.lineTo(8, -17);
+    ctx.stroke();
+
+    // Taildragger gear: fat tundra tires forward, tailwheel aft
+    ctx.strokeStyle = 'rgba(40,30,10,.7)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(16, 10);
+    ctx.lineTo(12, 20);
+    ctx.moveTo(24, 10);
+    ctx.lineTo(14, 20);
+    ctx.stroke();
+    this.tire(12, 24, 8);
+    this.tire(-46, 6, 3);
+
+    // Prop
+    if (engine && !crashed) {
+      ctx.globalAlpha = 0.35 + 0.6 * throttle;
+      ctx.strokeStyle = 'rgba(255,255,255,.9)';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(50, 0, 11 + 14 * throttle, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    void onGround;
+  }
+
+  private drawF16(throttle: number, onGround: boolean, stalled: boolean, crashed: boolean): void {
+    const ctx = this.ctx;
+    const bodyC = this.body(stalled, crashed, '#9aa2ad');
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(25,30,40,.5)';
+
+    // Afterburner / exhaust glow
+    if (!crashed && throttle > 0.05) {
+      const ab = throttle > 0.85;
+      const len = ab ? 22 + 8 * Math.random() : 6 + 8 * throttle;
+      ctx.globalAlpha = ab ? 0.9 : 0.4 + 0.3 * throttle;
+      ctx.fillStyle = ab ? '#ff9c3f' : '#ffc98a';
+      ctx.beginPath();
+      ctx.moveTo(-52, -3);
+      ctx.lineTo(-52 - len, 0);
+      ctx.lineTo(-52, 3.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // Fuselage
+    ctx.fillStyle = bodyC;
+    ctx.beginPath();
+    ctx.moveTo(62, 0); // needle nose
+    ctx.quadraticCurveTo(45, -5, 30, -6);
+    ctx.lineTo(20, -6);
+    // canopy bubble
+    ctx.quadraticCurveTo(14, -15, 2, -15);
+    ctx.quadraticCurveTo(-6, -15, -10, -7);
+    // spine to tail
+    ctx.lineTo(-46, -6);
+    ctx.lineTo(-52, -4);
+    ctx.lineTo(-52, 4);
+    ctx.lineTo(-30, 7);
+    // ventral intake
+    ctx.lineTo(4, 7);
+    ctx.lineTo(10, 11);
+    ctx.lineTo(26, 11);
+    ctx.lineTo(30, 7);
+    ctx.quadraticCurveTo(50, 4, 62, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Canopy tint
+    ctx.fillStyle = 'rgba(70,110,150,.8)';
+    ctx.beginPath();
+    ctx.moveTo(19, -6);
+    ctx.quadraticCurveTo(14, -14, 2, -14);
+    ctx.quadraticCurveTo(-4, -14, -8, -7);
+    ctx.closePath();
+    ctx.fill();
+
+    // Vertical tail (big, swept)
+    ctx.fillStyle = bodyC;
+    ctx.beginPath();
+    ctx.moveTo(-26, -6);
+    ctx.lineTo(-36, -32);
+    ctx.lineTo(-44, -32);
+    ctx.lineTo(-46, -6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    // Tail flash
+    ctx.fillStyle = crashed ? '#5c5c60' : '#c94040';
+    ctx.fillRect(-43.5, -32, 7, 5);
+
+    // Wing (side-view strake line)
+    ctx.fillStyle = crashed ? '#6e6e73' : '#7f8792';
+    ctx.beginPath();
+    ctx.moveTo(16, -3);
+    ctx.lineTo(-24, -1);
+    ctx.lineTo(-24, 3);
+    ctx.lineTo(20, 0);
+    ctx.closePath();
+    ctx.fill();
+    // Horizontal stab
+    ctx.beginPath();
+    ctx.moveTo(-34, 1);
+    ctx.lineTo(-52, 4);
+    ctx.lineTo(-52, 7);
+    ctx.lineTo(-32, 4);
+    ctx.closePath();
+    ctx.fill();
+
+    // Nozzle
+    ctx.fillStyle = '#4d5259';
+    this.roundRect(-56, -4, 6, 8, 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Gear
+    const gearA = onGround ? 1 : 0.55;
+    ctx.globalAlpha = gearA;
+    ctx.strokeStyle = 'rgba(25,30,40,.6)';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(30, 8);
+    ctx.lineTo(28, 20);
+    ctx.moveTo(-4, 9);
+    ctx.lineTo(-6, 22);
+    ctx.stroke();
+    ctx.fillStyle = '#2c2f34';
+    this.tire(28, 22, 4);
+    this.tire(-6, 24, 5);
+    ctx.globalAlpha = 1;
+  }
+
+  private tire(x: number, y: number, r: number): void {
+    const ctx = this.ctx;
+    ctx.fillStyle = '#2c2f34';
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#c9ccd2';
+    ctx.beginPath();
+    ctx.arc(x, y, Math.max(1.2, r * 0.35), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // ---------- Scenery ----------
 
   private drawClouds(camX: number, w: number): void {
     const ctx = this.ctx;
@@ -170,18 +519,20 @@ export class Renderer {
     scale: number,
     sx: (wx: number) => number,
     w: number,
+    game: Game,
   ): void {
     if (gY > innerHeight + 300) return;
     const leftWorld = camX - cx / scale - 200;
     const rightWorld = camX + (w - cx) / scale + 200;
+    const clearL = game.runway.startX - 120;
+    const clearR = game.runway.startX + game.runway.length + 200;
     const stepM = 120;
     const start = Math.floor(leftWorld / stepM) * stepM;
     for (let wx = start; wx <= rightWorld; wx += stepM) {
-      // keep the runway clear
-      if (wx > -80 && wx < 1100) continue;
+      if (wx > clearL && wx < clearR) continue;
       const x1 = sx(wx) + Math.sin(wx * 0.07) * 18;
-      this.drawTree(x1 - 30, gY, (1 + 0.15 * Math.sin(wx * 0.02)) * scale / 6);
-      this.drawTree(x1 + 10, gY, (0.9 + 0.1 * Math.cos(wx * 0.025)) * scale / 6);
+      this.drawTree(x1 - 30, gY, ((1 + 0.15 * Math.sin(wx * 0.02)) * scale) / 6);
+      this.drawTree(x1 + 10, gY, ((0.9 + 0.1 * Math.cos(wx * 0.025)) * scale) / 6);
       if (Math.floor(wx / stepM) % 3 === 0) this.drawHouse(x1 + 55, gY, scale / 6);
     }
   }
@@ -221,7 +572,7 @@ export class Renderer {
   private drawRunway(game: Game, gY: number, sx: (wx: number) => number, scale: number, w: number): void {
     const ctx = this.ctx;
     if (gY > innerHeight + 100) return;
-    const rw = game.level.runway;
+    const rw = game.runway;
     const x0 = sx(rw.startX);
     const x1 = sx(rw.startX + rw.length);
     if (x1 < -50 || x0 > w + 50) return;
@@ -258,73 +609,9 @@ export class Renderer {
     }
   }
 
-  private drawPlane(cx: number, cy: number, game: Game, crashed: boolean): void {
-    const ctx = this.ctx;
-    const s = game.state;
-    const d = game.derived;
-    const k = 0.72; // plane sprite scale
-
-    ctx.save();
-    ctx.translate(cx, cy);
-    ctx.rotate(-s.theta + (crashed ? 0.35 : 0));
-    ctx.scale(k, k);
-
-    // fuselage
-    ctx.fillStyle = crashed
-      ? 'rgba(120,120,125,.95)'
-      : d?.stalled && !s.onGround
-        ? 'rgba(255,120,120,.95)'
-        : 'rgba(250,250,252,.97)';
-    ctx.strokeStyle = 'rgba(0,0,0,.3)';
-    ctx.lineWidth = 2;
-    this.roundRect(-40, -7, 90, 14, 8);
-    ctx.fill();
-    ctx.stroke();
-
-    // wing, tail
-    ctx.fillStyle = 'rgba(255,255,255,.75)';
-    this.roundRect(-10, -22, 55, 10, 6);
-    ctx.fill();
-    this.roundRect(-45, -4, 18, 8, 4);
-    ctx.fill();
-    this.roundRect(-42, -18, 8, 16, 4);
-    ctx.fill();
-
-    // gear
-    ctx.strokeStyle = 'rgba(0,0,0,.35)';
-    ctx.fillStyle = s.onGround ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.55)';
-    ctx.globalAlpha = 0.9;
-    ctx.beginPath();
-    ctx.moveTo(5, 6);
-    ctx.lineTo(0, 18);
-    ctx.moveTo(28, 6);
-    ctx.lineTo(25, 18);
-    ctx.moveTo(46, 5);
-    ctx.lineTo(46, 15);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-    this.wheel(-2, 20, 5);
-    this.wheel(23, 20, 5);
-    this.wheel(46, 18, 4);
-
-    // prop disc
-    if (game.level.engine && !crashed) {
-      ctx.globalAlpha = 0.45 + 0.55 * s.throttle;
-      ctx.strokeStyle = 'rgba(255,255,255,.95)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(50, 0, 10 + 12 * s.throttle, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-    }
-
-    ctx.restore();
-  }
-
   private drawCrashFx(cx: number, cy: number): void {
     const ctx = this.ctx;
     const t = this.crashT;
-    // smoke puffs
     for (let i = 0; i < 7; i++) {
       const age = (t * 0.9 + i * 0.35) % 2.4;
       const r = 6 + age * 16;
@@ -336,7 +623,6 @@ export class Renderer {
       ctx.arc(x, y, r, 0, Math.PI * 2);
       ctx.fill();
     }
-    // flicker of flame
     ctx.globalAlpha = 0.7 + 0.3 * Math.sin(t * 30);
     ctx.fillStyle = 'rgba(255,140,50,.85)';
     ctx.beginPath();
@@ -347,7 +633,7 @@ export class Renderer {
 
   private drawRunwayPointer(game: Game, sx: (wx: number) => number, w: number, h: number): void {
     const ctx = this.ctx;
-    const rw = game.level.runway;
+    const rw = game.runway;
     // No pointer while any part of the runway is on screen.
     if (sx(rw.startX) < w && sx(rw.startX + rw.length) > 0) return;
 
@@ -377,13 +663,6 @@ export class Renderer {
     ctx.font = '11px system-ui';
     ctx.textAlign = 'center';
     ctx.fillText(`${(dist / 1000).toFixed(1)} km`, x, y + 22);
-  }
-
-  private wheel(x: number, y: number, r: number): void {
-    this.ctx.beginPath();
-    this.ctx.arc(x, y, r, 0, Math.PI * 2);
-    this.ctx.fill();
-    this.ctx.stroke();
   }
 
   private roundRect(x: number, y: number, w: number, h: number, r: number): void {
