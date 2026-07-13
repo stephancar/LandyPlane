@@ -2,803 +2,92 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-
-  <!-- ✅ Mobile: non-zoomable "app-like" viewport -->
   <meta name="viewport"
         content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
-
-  <title>2D Cessna-ish Lift/Drag/Thrust Stall Sim</title>
-  <style>
-    html,body{
-      height:100%;
-      margin:0;
-      background:#0b1020;
-      color:#eaf0ff;
-      font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
-      overscroll-behavior:none;
-      touch-action: manipulation; /* reduce double-tap zoom */
-    }
-    canvas{display:block;width:100vw;height:100vh}
-
-    :root{
-      --padL: calc(16px + env(safe-area-inset-left));
-      --padR: calc(16px + env(safe-area-inset-right));
-      --padT: calc(16px + env(safe-area-inset-top));
-      --padB: calc(16px + env(safe-area-inset-bottom));
-    }
-
-    .hud{
-      position:fixed; left:var(--padL); top:var(--padT); right:var(--padR);
-      display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start;
-      pointer-events:none;
-    }
-    .card{
-      pointer-events:none;
-      background:rgba(255,255,255,.08);
-      border:1px solid rgba(255,255,255,.14);
-      border-radius:14px;
-      padding:10px 12px;
-      backdrop-filter: blur(10px);
-      box-shadow: 0 18px 60px rgba(0,0,0,.35);
-      min-width: 240px;
-    }
-    .title{font-weight:700;letter-spacing:.2px;margin-bottom:6px}
-    .row{display:flex;justify-content:space-between;gap:10px;font-variant-numeric:tabular-nums}
-    .muted{opacity:.75}
-    .warn{color:#ffd46a}
-    .bad{color:#ff7b7b}
-
-    .help{
-      position:fixed; left:var(--padL); bottom:calc(var(--padB) + 110px);
-      max-width: 680px;
-      background:rgba(255,255,255,.06);
-      border:1px solid rgba(255,255,255,.12);
-      border-radius:14px;
-      padding:10px 12px;
-      backdrop-filter: blur(10px);
-      box-shadow: 0 18px 60px rgba(0,0,0,.35);
-      line-height:1.25;
-      pointer-events:none;
-    }
-    kbd{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);border-bottom-width:2px;padding:2px 6px;border-radius:8px}
-
-    .ui{
-      position:fixed; right:var(--padR); top:var(--padT);
-      width:min(320px, calc(100vw - var(--padL) - var(--padR)));
-      background:rgba(255,255,255,.08);
-      border:1px solid rgba(255,255,255,.14);
-      border-radius:14px;
-      padding:10px 12px;
-      backdrop-filter: blur(10px);
-      box-shadow: 0 18px 60px rgba(0,0,0,.35);
-      pointer-events:auto;
-      user-select:none;
-    }
-    .ui .title{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
-    .ui label{display:block;font-size:12px;opacity:.8;margin-bottom:6px}
-    .ui input[type="range"]{width:100%}
-    .ui .small{font-size:12px;opacity:.8}
-    .ui .btnrow{display:flex;gap:8px;margin-top:10px}
-    .ui button{
-      flex:1;
-      border-radius:12px;
-      border:1px solid rgba(255,255,255,.18);
-      background:rgba(255,255,255,.10);
-      color:#eaf0ff;
-      padding:10px 10px;
-      cursor:pointer;
-      -webkit-tap-highlight-color: transparent;
-    }
-    .ui button:hover{background:rgba(255,255,255,.14)}
-
-    /* --- Touch controls overlay --- */
-    .touch-ui{
-      position:fixed;
-      left:var(--padL);
-      right:var(--padR);
-      bottom:var(--padB);
-      height:96px;
-      display:none; /* enabled on touch devices via JS */
-      gap:12px;
-      pointer-events:auto;
-      user-select:none;
-    }
-    .touch-ui .col{display:flex; gap:12px; align-items:stretch}
-    .touch-ui .grow{flex:1}
-    .touch-ui button{
-      height:96px;
-      min-width:86px;
-      border-radius:18px;
-      border:1px solid rgba(255,255,255,.18);
-      background:rgba(0,0,0,.25);
-      color:#eaf0ff;
-      font-weight:700;
-      font-size:16px;
-      box-shadow: 0 12px 40px rgba(0,0,0,.35);
-      -webkit-tap-highlight-color: transparent;
-      touch-action: none; /* prevent scrolling */
-    }
-    .touch-ui button:active{transform: translateY(1px); background:rgba(0,0,0,.32)}
-    .touch-ui .stack{display:flex; flex-direction:column; gap:12px}
-    .touch-ui .stack button{
-      height:42px;
-      min-width:110px;
-      font-size:14px;
-      border-radius:16px;
-    }
-    .pill{
-      display:inline-flex; align-items:center; justify-content:center;
-      padding:4px 10px; border-radius:999px;
-      background:rgba(255,255,255,.10);
-      border:1px solid rgba(255,255,255,.16);
-      font-size:12px; opacity:.9;
-    }
-
-    /* Small screens: collapse HUD cards a bit */
-    @media (max-width: 560px){
-      .card{min-width: 190px}
-      .help{display:none} /* save space; touch UI covers bottom */
-      .ui{width:min(320px, calc(100vw - 24px))}
-    }
-  </style>
+  <title>LandyPlane — land it if you can</title>
+  <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
-<canvas id="c"></canvas>
+<canvas id="scene"></canvas>
 
-<div class="hud">
-  <div class="card" id="stats"></div>
-  <div class="card" id="aero"></div>
+<!-- In-flight HUD -->
+<div class="hud" id="hud" hidden>
+  <div class="card" id="flight-card">
+    <div class="title" id="hud-level">Flight</div>
+    <div class="row"><span class="muted">Speed</span><span id="hud-speed">0 kt</span></div>
+    <div class="row"><span class="muted">Altitude</span><span id="hud-alt">0 ft</span></div>
+    <div class="row"><span class="muted">V/S</span><span id="hud-vs">0 fpm</span></div>
+    <div class="row"><span class="muted">Pitch</span><span id="hud-pitch">0°</span></div>
+    <div class="row"><span class="muted">Throttle</span><span id="hud-throttle">0%</span></div>
+    <div class="row" id="hud-wind-row" hidden><span class="muted">Wind</span><span id="hud-wind">calm</span></div>
+  </div>
+  <div class="card" id="aero-card" hidden>
+    <div class="title">Aero</div>
+    <div class="row"><span class="muted">AoA</span><span id="aero-aoa">0°</span></div>
+    <div class="row"><span class="muted">CL / CD</span><span id="aero-clcd">0 / 0</span></div>
+    <div class="row"><span class="muted">Lift</span><span id="aero-lift">0 kN</span></div>
+    <div class="row"><span class="muted">Drag</span><span id="aero-drag">0 kN</span></div>
+    <div class="row"><span class="muted">Thrust</span><span id="aero-thrust">0 kN</span></div>
+  </div>
 </div>
 
-<div class="ui">
-  <div class="title">
-    <span style="font-weight:700">Settings</span>
-    <span class="small" id="warpReadout">Time warp: 1.0×</span>
+<div id="stall-warning" hidden>STALL</div>
+<div id="brake-pill" hidden>BRAKES</div>
+
+<div class="topbar" id="topbar" hidden>
+  <button id="btn-restart" type="button" title="Restart (R)">↺ Restart</button>
+  <button id="btn-menu" type="button" title="Levels (Esc)">☰ Levels</button>
+  <button id="btn-mute" type="button" title="Mute (M)">🔊</button>
+</div>
+
+<div class="help" id="help" hidden>
+  <b>↑/↓</b> pitch &nbsp;·&nbsp; <b>A/Z</b> throttle &nbsp;·&nbsp; <b>B</b> brakes &nbsp;·&nbsp;
+  <b>R</b> restart &nbsp;·&nbsp; <b>Esc</b> levels &nbsp;·&nbsp; <b>M</b> mute
+</div>
+
+<!-- Touch controls -->
+<div class="touch-ui" id="touch-ui" hidden>
+  <div class="cluster">
+    <button id="t-thr-up" type="button">THR +</button>
+    <button id="t-thr-down" type="button">THR −</button>
   </div>
-  <label for="warp">Time warp (simulation speed)</label>
-  <input id="warp" type="range" min="0.5" max="3.0" step="0.1" value="1.5" />
-  <div class="small">On mobile, use the on-screen controls at the bottom.</div>
-  <div class="btnrow">
-    <button id="resetBtn" type="button">Reset</button>
-    <button id="trimBtn" type="button" title="Sets pitch rate to zero">Zero Q</button>
+  <button id="t-brakes" type="button" class="wide">BRAKES</button>
+  <div class="cluster">
+    <button id="t-pitch-up" type="button">PITCH ▲</button>
+    <button id="t-pitch-down" type="button">PITCH ▼</button>
   </div>
 </div>
 
-<!-- ✅ Touch controls (only shown on touch devices) -->
-<div class="touch-ui" id="touchUI">
-  <div class="col grow">
-    <button id="throttleUp">THROTTLE +<div class="pill" style="margin-top:6px">hold</div></button>
+<!-- Level select -->
+<div class="overlay" id="menu">
+  <div class="panel">
+    <h1>Landy<span class="accent">Plane</span></h1>
+    <p class="tagline">Real-ish physics. One goal: put it on the pavement gently.</p>
+    <div id="level-list"></div>
+    <div class="menu-foot">
+      <button id="btn-free" type="button">Free flight sandbox</button>
+      <label class="check"><input type="checkbox" id="opt-invert" /> Invert pitch keys</label>
+    </div>
+    <p class="finehelp"><b>↑/↓</b> pitch · <b>A/Z</b> throttle · <b>B</b> brakes · pass a level with a score of 50+ to unlock the next</p>
   </div>
+</div>
 
-  <div class="col">
-    <div class="stack">
-      <button id="pitchUp">PITCH ▲</button>
-      <button id="pitchDown">PITCH ▼</button>
+<!-- Landing report -->
+<div class="overlay" id="report" hidden>
+  <div class="panel">
+    <h2 id="report-tier">Buttered</h2>
+    <div id="report-score" class="bigscore">100</div>
+    <div id="report-crash" class="crashtext" hidden></div>
+    <table id="report-parts"></table>
+    <div id="report-best" class="best"></div>
+    <div class="btnrow">
+      <button id="btn-retry" type="button">Fly again (R)</button>
+      <button id="btn-next" type="button" hidden>Next level →</button>
+      <button id="btn-levels" type="button">Levels</button>
     </div>
   </div>
-
-  <div class="col grow" style="justify-content:flex-end">
-    <button id="throttleDown">THROTTLE −<div class="pill" style="margin-top:6px">hold</div></button>
-  </div>
 </div>
 
-<script>
-(() => {
-  const canvas = document.getElementById('c');
-  const ctx = canvas.getContext('2d');
-
-  const statsEl = document.getElementById('stats');
-  const aeroEl  = document.getElementById('aero');
-
-  const warpEl = document.getElementById('warp');
-  const warpReadout = document.getElementById('warpReadout');
-  const resetBtn = document.getElementById('resetBtn');
-  const trimBtn = document.getElementById('trimBtn');
-
-  const touchUI = document.getElementById('touchUI');
-  const btnThrottleUp = document.getElementById('throttleUp');
-  const btnThrottleDown = document.getElementById('throttleDown');
-  const btnPitchUp = document.getElementById('pitchUp');
-  const btnPitchDown = document.getElementById('pitchDown');
-
-  // --- Resize ---
-  function resize(){
-    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-    canvas.width  = Math.floor(innerWidth * dpr);
-    canvas.height = Math.floor(innerHeight * dpr);
-    ctx.setTransform(dpr,0,0,dpr,0,0);
-  }
-  addEventListener('resize', resize);
-  resize();
-
-  // ------------------------------
-  // Parameters (C172-ish)
-  // ------------------------------
-  const P = {
-    m: 1100,
-    S: 16.2,
-    cbar: 1.5,
-    Iyy: 1850,
-
-    CL0: 0.28,
-    CLalpha: 5.4,
-    CLmax: 1.50,
-    alpha_stall: 15 * Math.PI/180,
-    alpha_zero_lift: -2 * Math.PI/180,
-
-    CD0: 0.030,
-    k: 0.050,
-
-    postStallLiftDrop: 0.55,
-    postStallDragBoost: 1.8,
-
-    Cm0: 0.03,
-    Cmalpha: -0.75,
-    Cm_q: -12.0,
-    Cm_de: -1.1,
-
-    Pmax: 120000,
-    propEff: 0.80,
-    Tmax_static: 2600,
-
-    rho0: 1.225,
-    Hscale: 8500,
-
-    gearHeight: 1.35,
-    muRoll: 0.03,
-    groundRestitution: 0.0,
-
-    runwayLength: 600,
-    runwayWidth: 18,
-    runwayStartX: -40,
-
-    g: 9.80665,
-  };
-
-  // State
-  const state = {
-    x: 0,
-    y: P.gearHeight,
-    vx: 0,
-    vy: 0,
-    theta: 0,
-    q: 0,
-    throttle: 0.0,
-  };
-
-  const sim = { timeWarp: parseFloat(warpEl.value) || 1.5 };
-
-  function reset(){
-    state.x = 0;
-    state.y = P.gearHeight;
-    state.vx = 0;
-    state.vy = 0;
-    state.theta = 0;
-    state.q = 0;
-    state.throttle = 0.0;
-  }
-
-  resetBtn.addEventListener('click', reset);
-  trimBtn.addEventListener('click', () => { state.q = 0; });
-
-  function updateWarpReadout(){
-    sim.timeWarp = parseFloat(warpEl.value) || 1;
-    warpReadout.textContent = `Time warp: ${sim.timeWarp.toFixed(1)}×`;
-  }
-  warpEl.addEventListener('input', updateWarpReadout);
-  updateWarpReadout();
-
-  // ------------------------------
-  // Keyboard + touch input state
-  // ------------------------------
-  const keys = new Set();
-  addEventListener('keydown', (e) => {
-    if (e.code === 'KeyR') reset();
-    keys.add(e.code);
-    if (['ArrowUp','ArrowDown','Space'].includes(e.code)) e.preventDefault();
-  }, {passive:false});
-  addEventListener('keyup', (e) => keys.delete(e.code));
-
-  // Touch flags (continuous while held)
-  const touch = { throttleUp:false, throttleDown:false, pitchUp:false, pitchDown:false };
-
-  function bindHold(btn, onDown, onUp){
-    const down = (e)=>{ e.preventDefault(); onDown(); };
-    const up   = (e)=>{ e.preventDefault(); onUp(); };
-    btn.addEventListener('pointerdown', down);
-    btn.addEventListener('pointerup', up);
-    btn.addEventListener('pointercancel', up);
-    btn.addEventListener('pointerleave', up);
-  }
-
-  bindHold(btnThrottleUp,   ()=>touch.throttleUp=true,   ()=>touch.throttleUp=false);
-  bindHold(btnThrottleDown, ()=>touch.throttleDown=true, ()=>touch.throttleDown=false);
-  bindHold(btnPitchUp,      ()=>touch.pitchUp=true,      ()=>touch.pitchUp=false);
-  bindHold(btnPitchDown,    ()=>touch.pitchDown=true,    ()=>touch.pitchDown=false);
-
-  // Show touch controls on touch-capable devices
-  const isTouch = matchMedia('(pointer:coarse)').matches || ('ontouchstart' in window);
-  if (isTouch) touchUI.style.display = 'flex';
-
-  // ------------------------------
-  // Helpers
-  // ------------------------------
-  const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
-  const lerp  = (a,b,t)=>a+(b-a)*t;
-
-  function airDensity(alt){
-    return P.rho0 * Math.exp(-alt / P.Hscale);
-  }
-  function sign(x){ return x<0?-1:1; }
-  function deg(rad){ return rad*180/Math.PI; }
-
-  function wrapPi(a){
-    while (a > Math.PI) a -= 2*Math.PI;
-    while (a < -Math.PI) a += 2*Math.PI;
-    return a;
-  }
-
-  function computeCL(alpha){
-    const alphaEff = alpha - P.alpha_zero_lift;
-    const CL_lin = P.CL0 + P.CLalpha * alphaEff;
-
-    const alphaAbs = Math.abs(alpha);
-    if (alphaAbs <= P.alpha_stall) return clamp(CL_lin, -P.CLmax, P.CLmax);
-
-    const over = (alphaAbs - P.alpha_stall) / (25*Math.PI/180);
-    const t = clamp(over, 0, 1);
-    const CL_deep = lerp(P.CLmax, P.postStallLiftDrop * P.CLmax, t) * sign(CL_lin);
-    return CL_deep;
-  }
-
-  function computeCD(CL, stalled){
-    let CD = P.CD0 + P.k * CL*CL;
-    if (stalled) CD *= P.postStallDragBoost;
-    return CD;
-  }
-
-  // Clouds (screen-ish, parallax by world x)
-  const clouds = (() => {
-    const arr = [];
-    let seed = 1337;
-    const rnd = () => (seed = (seed*1664525 + 1013904223) >>> 0) / 4294967296;
-    for (let i=0;i<14;i++){
-      arr.push({ x:rnd()*2000-800, y:rnd()*240+40, s:rnd()*0.9+0.6, a:rnd()*0.25+0.10 });
-    }
-    return arr;
-  })();
-
-  // ------------------------------
-  // Simulation loop
-  // ------------------------------
-  let lastT = performance.now();
-  function tick(now){
-    const rawDt = clamp((now - lastT) / 1000, 0, 0.033);
-    lastT = now;
-    const dt = clamp(rawDt * sim.timeWarp, 0, 0.033);
-
-    // Elevator input from keyboard OR touch
-    let deCmd = 0;
-    if (keys.has('ArrowUp') || touch.pitchUp)   deCmd += 1;
-    if (keys.has('ArrowDown') || touch.pitchDown) deCmd -= 1;
-    const de = clamp(deCmd * (12*Math.PI/180), -(12*Math.PI/180), (12*Math.PI/180));
-
-    // Throttle change from keyboard OR touch
-    const throttleRate = 0.35;
-    const shift = keys.has('ShiftLeft') || keys.has('ShiftRight');
-    const kbDown = keys.has('Space') && shift;
-    const kbUp   = keys.has('Space') && !shift;
-
-    const upHeld = kbUp || touch.throttleUp;
-    const dnHeld = kbDown || touch.throttleDown;
-
-    if (dnHeld) state.throttle -= throttleRate * dt;
-    else if (upHeld) state.throttle += throttleRate * dt;
-    state.throttle = clamp(state.throttle, 0, 1);
-
-    // Kinematics
-    const V = Math.max(0.1, Math.hypot(state.vx, state.vy));
-    const gamma = Math.atan2(state.vy, state.vx);
-    const alpha = wrapPi(state.theta - gamma);
-
-    // Atmosphere
-    const rho = airDensity(Math.max(0, state.y - P.gearHeight));
-
-    // Aero
-    const CL = computeCL(alpha);
-    const stalled = Math.abs(alpha) > P.alpha_stall;
-    const CD = computeCD(CL, stalled);
-
-    const qbar = 0.5 * rho * V*V;
-    const L = qbar * P.S * CL;
-    const D = qbar * P.S * CD;
-
-    const invV = 1 / V;
-    const ux = state.vx * invV, uy = state.vy * invV;
-    const nx = -uy, ny = ux;
-
-    const Fx_aero = (-D)*ux + (L)*nx;
-    const Fy_aero = (-D)*uy + (L)*ny;
-
-    // Thrust from power
-    const Pshaft = P.Pmax * state.throttle;
-    const T_power = (P.propEff * Pshaft) / Math.max(V, 12);
-    const T_cap = lerp(P.Tmax_static, P.Tmax_static*0.55, clamp((V - 5)/35, 0, 1));
-    const T = clamp(T_power, 0, T_cap);
-
-    const Tx = T * Math.cos(state.theta);
-    const Ty = T * Math.sin(state.theta);
-
-    // Weight
-    const Wy = -P.m * P.g;
-
-    // Net
-    let Fx = Fx_aero + Tx;
-    let Fy = Fy_aero + Ty + Wy;
-
-    // Integrate
-    state.vx += (Fx / P.m) * dt;
-    state.vy += (Fy / P.m) * dt;
-    state.x  += state.vx * dt;
-    state.y  += state.vy * dt;
-
-    // Ground contact
-    const onGround = state.y <= P.gearHeight + 1e-6;
-    if (state.y < P.gearHeight) {
-      state.y = P.gearHeight;
-      if (state.vy < 0) state.vy = 0;
-    }
-
-    if (onGround) {
-      if (state.vy < 0) state.vy = 0;
-      const liftY = Fy_aero;
-      const thrustY = Ty;
-      let N = (P.m * P.g) - (liftY + thrustY);
-      N = Math.max(0, N);
-
-      const Fr = P.muRoll * N;
-      if (Math.abs(state.vx) > 0.01) {
-        const s = Math.sign(state.vx);
-        const dv = (Fr / P.m) * dt;
-        if (Math.abs(state.vx) <= dv) state.vx = 0;
-        else state.vx -= s * dv;
-      } else {
-        if (Math.abs(Tx) < Fr) state.vx = 0;
-      }
-    }
-
-    // Pitch dynamics
-    const qHat = (state.q * P.cbar) / Math.max(2*V, 1);
-    const Cm = P.Cm0 + P.Cmalpha*alpha + P.Cm_q*qHat + P.Cm_de*de;
-    const M  = qbar * P.S * P.cbar * Cm;
-    const qdot = M / P.Iyy;
-
-    state.q += qdot * dt;
-    state.theta = wrapPi(state.theta + state.q * dt);
-
-    draw(V, gamma, alpha, rho, CL, CD, L, D, T, stalled, onGround);
-    requestAnimationFrame(tick);
-  }
-
-  // ------------------------------
-  // Rendering
-  // ------------------------------
-  function draw(V, gamma, alpha, rho, CL, CD, L, D, T, stalled, onGround){
-    const w = innerWidth, h = innerHeight;
-
-    // Camera scale (px per meter)
-    const scale = 6;
-
-    const cx = w*0.35;
-    const cy = h*0.55;
-
-    const camX = state.x;
-    const camY = state.y;
-
-    const sx = (wx) => cx + (wx - camX) * scale;
-    const sy = (wy) => cy + (camY - wy) * scale;
-
-    ctx.clearRect(0,0,w,h);
-
-    // Sky
-    const grd = ctx.createLinearGradient(0,0,0,h);
-    grd.addColorStop(0, '#8fd0ff');
-    grd.addColorStop(0.55, '#bfe7ff');
-    grd.addColorStop(1, '#d9f2ff');
-    ctx.fillStyle = grd;
-    ctx.fillRect(0,0,w,h);
-
-    // Clouds parallax
-    drawClouds(camX);
-
-    const groundLineY = sy(P.gearHeight);
-
-    drawBackground(groundLineY);
-
-    // Ground
-    ctx.fillStyle = 'rgba(20,28,24,.55)';
-    ctx.fillRect(0, groundLineY, w, h-groundLineY);
-
-    // Runway
-    drawRunway(groundLineY);
-
-    // Plane position on screen
-    const px = cx, py = cy;
-
-    // Flight path vector
-    ctx.globalAlpha = 0.55;
-    ctx.strokeStyle = 'rgba(0,0,0,.25)';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.moveTo(px, py);
-    ctx.lineTo(px + Math.cos(gamma)*70, py - Math.sin(gamma)*70);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-
-    // Plane
-    ctx.save();
-    ctx.translate(px, py);
-    ctx.rotate(-state.theta);
-
-    ctx.fillStyle = stalled ? 'rgba(255,90,90,.95)' : 'rgba(255,255,255,.95)';
-    ctx.strokeStyle = 'rgba(0,0,0,.30)';
-    ctx.lineWidth = 2;
-    roundRect(ctx, -40, -7, 90, 14, 8);
-    ctx.fill(); ctx.stroke();
-
-    ctx.fillStyle = 'rgba(255,255,255,.70)';
-    roundRect(ctx, -10, -22, 55, 10, 6);
-    ctx.fill();
-
-    ctx.fillStyle = 'rgba(255,255,255,.70)';
-    roundRect(ctx, -45, -4, 18, 8, 4);
-    ctx.fill();
-    roundRect(ctx, -42, -18, 8, 16, 4);
-    ctx.fill();
-
-    // Gear
-    const gearColor = onGround ? 'rgba(255,255,255,.95)' : 'rgba(255,255,255,.55)';
-    ctx.strokeStyle = 'rgba(0,0,0,.35)';
-    ctx.lineWidth = 2;
-    ctx.fillStyle = gearColor;
-
-    ctx.globalAlpha = 0.9;
-    ctx.beginPath();
-    ctx.moveTo(5, 6);  ctx.lineTo(0, 18);
-    ctx.moveTo(28, 6); ctx.lineTo(25, 18);
-    ctx.moveTo(46, 5); ctx.lineTo(46, 15);
-    ctx.stroke();
-
-    ctx.globalAlpha = 1;
-    wheel(-2, 20, 5);
-    wheel(23, 20, 5);
-    wheel(46, 18, 4);
-
-    // Prop
-    ctx.globalAlpha = 0.45 + 0.55*state.throttle;
-    ctx.strokeStyle = 'rgba(255,255,255,.95)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(50, 0, 10 + 12*state.throttle, 0, Math.PI*2);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-
-    ctx.restore();
-
-    // HUD text
-    const kts = V * 1.94384;
-    const fpm = state.vy * 196.8504;
-    const altFt = (state.y - P.gearHeight) * 3.28084;
-
-    const stallText =
-      stalled ? `<span class="bad">STALL</span>` :
-      (Math.abs(alpha) > P.alpha_stall*0.85 ? `<span class="warn">near stall</span>` : `<span class="muted">ok</span>`);
-
-    statsEl.innerHTML = `
-      <div class="title">Flight</div>
-      <div class="row"><span class="muted">Speed</span><span>${kts.toFixed(1)} kt</span></div>
-      <div class="row"><span class="muted">Altitude AGL</span><span>${altFt.toFixed(0)} ft</span></div>
-      <div class="row"><span class="muted">V/S</span><span>${fpm.toFixed(0)} fpm</span></div>
-      <div class="row"><span class="muted">Pitch</span><span>${deg(state.theta).toFixed(1)}°</span></div>
-      <div class="row"><span class="muted">Throttle</span><span>${Math.round(state.throttle*100)}%</span></div>
-      <div class="row"><span class="muted">Ground</span><span>${onGround ? 'yes' : 'no'}</span></div>
-    `;
-
-    aeroEl.innerHTML = `
-      <div class="title">Aero</div>
-      <div class="row"><span class="muted">AoA</span><span>${deg(alpha).toFixed(1)}°</span></div>
-      <div class="row"><span class="muted">CL / CD</span><span>${CL.toFixed(2)} / ${CD.toFixed(3)}</span></div>
-      <div class="row"><span class="muted">Lift</span><span>${(L/1000).toFixed(1)} kN</span></div>
-      <div class="row"><span class="muted">Drag</span><span>${(D/1000).toFixed(1)} kN</span></div>
-      <div class="row"><span class="muted">Thrust</span><span>${(T/1000).toFixed(2)} kN</span></div>
-      <div class="row"><span class="muted">State</span><span>${stallText}</span></div>
-      <div class="row"><span class="muted">ρ</span><span>${rho.toFixed(3)} kg/m³</span></div>
-    `;
-
-    if (stalled){
-      ctx.globalAlpha = 0.55;
-      ctx.fillStyle = 'rgba(255,90,90,.10)';
-      ctx.fillRect(0,0,w,h);
-      ctx.globalAlpha = 1;
-    }
-
-    function wheel(x,y,r){
-      ctx.beginPath();
-      ctx.arc(x,y,r,0,Math.PI*2);
-      ctx.fill();
-      ctx.stroke();
-    }
-
-    function drawClouds(camX){
-      const par = 0.15;
-      for (const c of clouds){
-        const x = (c.x - camX*par) % (w + 600);
-        const px = x < -300 ? x + (w + 600) : x;
-        const py = c.y;
-        const s  = c.s;
-
-        ctx.globalAlpha = c.a;
-        ctx.fillStyle = '#ffffff';
-        blob(px, py, 70*s, 28*s);
-        blob(px+50*s, py+10*s, 64*s, 24*s);
-        blob(px-55*s, py+12*s, 58*s, 22*s);
-        ctx.globalAlpha = 1;
-      }
-      function blob(x,y,rx,ry){
-        ctx.beginPath();
-        ctx.ellipse(x,y,rx,ry,0,0,Math.PI*2);
-        ctx.fill();
-      }
-    }
-
-    function drawBackground(groundLineY){
-      // haze
-      ctx.globalAlpha = 0.20;
-      ctx.fillStyle = '#5fb7d8';
-      ctx.fillRect(0, 0, w, groundLineY - 120);
-      ctx.globalAlpha = 1;
-
-      // hills
-      const hillPar = 0.25;
-      ctx.globalAlpha = 0.35;
-      ctx.fillStyle = '#2c6f86';
-      ctx.beginPath();
-      ctx.moveTo(0, groundLineY);
-      for (let i=0;i<=w;i+=60){
-        const wx = (camX - (cx - i)/scale);
-        const bump = 24*Math.sin(wx*0.001*hillPar) + 16*Math.sin(wx*0.003*hillPar + 1.7);
-        ctx.lineTo(i, groundLineY - 140 - bump);
-      }
-      ctx.lineTo(w, groundLineY);
-      ctx.closePath();
-      ctx.fill();
-      ctx.globalAlpha = 1;
-
-      // trees/houses
-      const baseY = groundLineY - 30;
-      const leftWorld = camX - (cx/scale) - 200;
-      const rightWorld = camX + ((w - cx)/scale) + 200;
-      const step = 120;
-      const start = Math.floor(leftWorld/step)*step;
-
-      for (let wx = start; wx <= rightWorld; wx += step){
-        const pxm = sx(wx);
-        const jitter = Math.sin(wx*0.07) * 18;
-        const x1 = pxm + jitter;
-
-        drawTree(x1 - 30, baseY, 1.0 + 0.15*Math.sin(wx*0.02));
-        drawTree(x1 + 10, baseY, 0.9 + 0.10*Math.cos(wx*0.025));
-        if ((Math.floor(wx/step) % 3) === 0) drawHouse(x1 + 55, baseY+6, 1.0);
-      }
-
-      function drawTree(x,y,s){
-        ctx.globalAlpha = 0.70;
-        ctx.fillStyle = 'rgba(30,38,28,.9)';
-        ctx.fillRect(x-3*s, y-18*s, 6*s, 18*s);
-
-        ctx.globalAlpha = 0.85;
-        ctx.fillStyle = 'rgba(22,60,36,.95)';
-        ctx.beginPath();
-        ctx.arc(x, y-28*s, 14*s, 0, Math.PI*2);
-        ctx.arc(x-12*s, y-22*s, 12*s, 0, Math.PI*2);
-        ctx.arc(x+12*s, y-22*s, 12*s, 0, Math.PI*2);
-        ctx.fill();
-        ctx.globalAlpha = 1;
-      }
-
-      function drawHouse(x,y,s){
-        ctx.globalAlpha = 0.75;
-        ctx.fillStyle = 'rgba(35,35,45,.85)';
-        ctx.fillRect(x, y-22*s, 34*s, 22*s);
-        ctx.fillStyle = 'rgba(60,30,30,.85)';
-        ctx.beginPath();
-        ctx.moveTo(x-2*s, y-22*s);
-        ctx.lineTo(x+17*s, y-36*s);
-        ctx.lineTo(x+36*s, y-22*s);
-        ctx.closePath();
-        ctx.fill();
-        ctx.fillStyle = 'rgba(200,230,255,.55)';
-        ctx.fillRect(x+20*s, y-14*s, 8*s, 7*s);
-        ctx.globalAlpha = 1;
-      }
-    }
-
-    function drawRunway(groundLineY){
-      const x0 = P.runwayStartX;
-      const x1 = P.runwayStartX + P.runwayLength;
-      const rw = P.runwayWidth;
-
-      const sx0 = sx(x0);
-      const sx1 = sx(x1);
-
-      const halfWpx = (rw * scale) * 0.5;
-      const top = groundLineY - halfWpx;
-      const height = halfWpx * 2;
-
-      ctx.globalAlpha = 0.95;
-      ctx.fillStyle = 'rgba(40,45,55,.95)';
-      ctx.fillRect(sx0, top, sx1 - sx0, height);
-
-      ctx.strokeStyle = 'rgba(255,255,255,.65)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(sx0, top+2); ctx.lineTo(sx1, top+2);
-      ctx.moveTo(sx0, top+height-2); ctx.lineTo(sx1, top+height-2);
-      ctx.stroke();
-
-      // Centerline (30m dash, 20m gap)
-      const dashLen = 30;
-      const gapLen  = 20;
-      const dashW   = Math.max(2, halfWpx * 0.18);
-      const centerY = top + height/2;
-
-      ctx.strokeStyle = 'rgba(255,255,255,.80)';
-      ctx.lineWidth = dashW;
-      ctx.lineCap = 'butt';
-
-      for (let wx = x0 + 10; wx < x1 - 10; wx += (dashLen + gapLen)){
-        const a = sx(wx);
-        const b = sx(Math.min(wx + dashLen, x1));
-        ctx.beginPath();
-        ctx.moveTo(a, centerY);
-        ctx.lineTo(b, centerY);
-        ctx.stroke();
-      }
-
-      // End markers
-      ctx.globalAlpha = 0.9;
-      ctx.fillStyle = 'rgba(255,255,255,.55)';
-      const endMarkW = Math.max(6, 3*scale);
-      const band = Math.max(6, halfWpx*0.35);
-      ctx.fillRect(sx(x0+5), centerY - band/2, endMarkW, band);
-      ctx.fillRect(sx(x1-5), centerY - band/2, endMarkW, band);
-      ctx.globalAlpha = 1;
-
-      // texture
-      ctx.globalAlpha = 0.10;
-      ctx.fillStyle = '#000';
-      for (let i=0;i<18;i++){
-        const t = i/18;
-        const xx = lerp(sx0, sx1, t) + 8*Math.sin((camX*0.02)+i);
-        ctx.fillRect(xx, top, 1, height);
-      }
-      ctx.globalAlpha = 1;
-    }
-  }
-
-  function roundRect(ctx, x,y,w,h,r){
-    const rr = Math.min(r, w/2, h/2);
-    ctx.beginPath();
-    ctx.moveTo(x+rr, y);
-    ctx.arcTo(x+w, y, x+w, y+h, rr);
-    ctx.arcTo(x+w, y+h, x, y+h, rr);
-    ctx.arcTo(x, y+h, x, y, rr);
-    ctx.arcTo(x, y, x+w, y, rr);
-    ctx.closePath();
-  }
-
-  requestAnimationFrame(tick);
-})();
-</script>
+<script type="module" src="/src/main.ts"></script>
 </body>
 </html>
